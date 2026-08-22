@@ -1,0 +1,54 @@
+{
+  "name": "deepseek-whale-widget-desktop",
+  "version": "1.0.0",
+  "description": "DeepSeek 余额小鲸鱼桌面版 —— 脱离 DSH 的独立桌面挂件（Electron）",
+  "main": "main.js",
+  "private": true,
+  "author": "MeteorNOX <meteornox@example.com>",
+  "contributors": [
+    "EthanMaven <ethanmaven@example.com>"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "node scripts/prepare-electron.mjs && electron-builder --win portable",
+    "dist:dir": "node scripts/prepare-electron.mjs && electron-builder --win dir"
+  },
+  "devDependencies": {
+    "electron": "31.7.7",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.2"
+  },
+  "build": {
+    "appId": "com.meteornox.whalewidget",
+    "productName": "DeepSeekWhaleWidget",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "electronDist": "build/electron-dist",
+    "portable": {
+      "artifactName": "${productName}_${version}_windows_x86.${ext}"
+    },
+    "npmRebuild": false
+  }
+}
