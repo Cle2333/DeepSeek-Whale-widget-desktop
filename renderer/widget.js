@@ -310,18 +310,21 @@ bubbleBox.addEventListener('click', function (e) {
   e.stopPropagation()
   if (!bubbleShown) return
   if (costBubbleActive) {
-    // 消耗金额泡泡：点击关闭（确认）
     hideCostBubble()
     return
   }
   if (bubbleRandomActive) {
-    // 再次点击：关闭
     hideBubble()
   } else {
-    // 首次点击：切到随机台词段（不延长总显示时长）
+    // 首次点击：切到随机台词段，并重置5秒计时器让第二段完整停留
     bubbleRandomActive = true
     bubbleRandomLines = pickRandomLines()
     swapBubbleContent(function () { applyBubbleLines(bubbleRandomLines) })
+    // 🆕 重置自动关闭计时器
+    if (bubbleTimer) {
+      clearTimeout(bubbleTimer)
+      bubbleTimer = setTimeout(hideBubble, BUBBLE_MS)
+    }
   }
 })
 

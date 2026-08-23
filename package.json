@@ -1,18 +1,20 @@
 {
   "name": "deepseek-whale-widget-desktop",
-  "version": "1.0.0",
-  "description": "DeepSeek 余额小鲸鱼桌面版 —— 脱离 DSH 的独立桌面挂件（Electron）",
+  "version": "1.0.1",
+  "description": "DeepSeek 余额小鲸鱼桌面版",
   "main": "main.js",
   "private": true,
-  "author": "MeteorNOX <meteornox@example.com>",
+  "author": "MeteorNOX",
   "contributors": [
-    "EthanMaven <ethanmaven@example.com>"
+    "EthanMaven"
   ],
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "dist": "node scripts/prepare-electron.mjs && electron-builder --win portable",
-    "dist:dir": "node scripts/prepare-electron.mjs && electron-builder --win dir"
+    "dist:win": "node scripts/prepare-electron.mjs && electron-builder --win",
+    "dist:mac": "node scripts/prepare-electron.mjs && electron-builder --mac",
+    "dist:all": "node scripts/prepare-electron.mjs && electron-builder --win --mac"
   },
   "devDependencies": {
     "electron": "31.7.7",
@@ -37,17 +39,31 @@
       "target": [
         {
           "target": "portable",
-          "arch": [
-            "x64"
-          ]
+          "arch": ["x64"]
         }
       ],
       "icon": "build/icon.ico",
       "signAndEditExecutable": false
     },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
     "electronDist": "build/electron-dist",
     "portable": {
-      "artifactName": "${productName}_${version}_windows_x86.${ext}"
+      "artifactName": "${productName}_${version}_win_x86.${ext}"
     },
     "npmRebuild": false
   }

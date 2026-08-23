@@ -54,7 +54,7 @@ $env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-
 npm run dist
 ```
 
-产物：`dist/DeepSeekWhaleWidget_<version>_windows_x86.exe`（当前版本 1.0.0）。
+产物：`dist/DeepSeekWhaleWidget_<version>_windows_x86.exe`（当前版本 1.0.1）。
 
 构建说明：
 
