@@ -11,6 +11,7 @@
 
 const { app, BrowserWindow, ipcMain, screen, Menu } = require('electron')
 const path = require('node:path')
+const fs = require('node:fs')
 const { createWhaleCore, isPeakTime } = require('./lib/core.js')
 const { createPlatformClient, PARTITION, BASE, USAGE_URL } = require('./lib/platform.js')
 
@@ -271,6 +272,24 @@ function createWindow() {
   // 冒烟测试：electron . --smoke —— 启动后自动退出并打印渲染层状态
   if (process.argv.includes('--smoke')) {
     const WAIT_MS = Number((process.argv.find((a) => a.startsWith('--smoke-wait=')) || '').split('=')[1]) || 16000
+    // portable 单文件版由 NSIS 启动器解压后独立拉启应用，**stdout 不会回传**，
+    // 因此把结果同时写入文件，供打包后验证（读取 smoke-result.txt）。
+    const smokeLines = []
+    const origLog = console.log
+    console.log = (...a) => {
+      smokeLines.push(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '))
+      origLog(...a)
+    }
+    const flushSmoke = () => {
+      const outFile = path.join(app.getPath('userData'), 'smoke-result.txt')
+      try {
+        fs.writeFileSync(outFile, smokeLines.join('\n') + '\n', 'utf8')
+        origLog('[smoke] 结果已写入 ' + outFile)
+      } catch (err) {
+        // 不静默：写失败必须可见（这里曾因 fs 未导入而静默丢结果）
+        origLog('[smoke] ✘ 写结果文件失败: ' + err.message)
+      }
+    }
     win.webContents.on('console-message', (e, level, message) => {
       console.log('[renderer:' + level + ']', message)
     })
@@ -351,10 +370,30 @@ function createWindow() {
           console.log('SMOKE CHECK 站外导航被拦(URL 仍在平台站): ' + /platform\.deepseek\.com/.test(urlNow))
           console.log('SMOKE CHECK 当前 URL: ' + urlNow)
         }
+
+        // 5) 开机自启端到端验证（只有打包版才有意义）
+        console.log('SMOKE CHECK isPackaged: ' + app.isPackaged)
+        console.log('SMOKE CHECK PORTABLE_EXECUTABLE_FILE: ' + (process.env.PORTABLE_EXECUTABLE_FILE || '(未设置)'))
+        console.log('SMOKE CHECK process.execPath: ' + process.execPath)
+        const auto0 = getAutoStart()
+        console.log('SMOKE CHECK autoStart 初始: ' + JSON.stringify(auto0))
+        if (auto0.supported) {
+          const on = setAutoStart(true)
+          const chk1 = getAutoStart()
+          console.log('SMOKE CHECK 开启自启: ' + JSON.stringify(on))
+          console.log('SMOKE CHECK 回读(应为 true): ' + JSON.stringify(chk1))
+          const off = setAutoStart(false)
+          const chk2 = getAutoStart()
+          console.log('SMOKE CHECK 关闭自启: ' + JSON.stringify(off))
+          console.log('SMOKE CHECK 回读(应为 false): ' + JSON.stringify(chk2))
+        } else {
+          console.log('SMOKE CHECK 自启不可用（开发态）: ' + (auto0.reason || ''))
+        }
       } catch (err) {
         console.log('SMOKE RENDERER ERROR: ' + err.message)
       }
       console.log('SMOKE OK: window created, size=' + JSON.stringify(win.getSize()) + ' pos=' + JSON.stringify(win.getPosition()))
+      flushSmoke()
       app.quit()
     }, WAIT_MS)
   }
