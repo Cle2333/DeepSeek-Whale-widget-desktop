@@ -2,14 +2,17 @@
 // dsh-whale-widget 桌面版 —— Electron 主进程
 // ----------------------------------------------------------------------------
 // 一个透明、无边框、置顶的桌面小鲸鱼挂件窗口。
-// 用户数据（userdata.json）存放在 EXE 同目录；API_KEY / 平台令牌经 AES-GCM
-// 加密后写入（见 lib/core.js）。
+//
+// 数据来源：DeepSeek 开放平台会话（见 lib/platform.js）—— **不需要 API key**，
+// 今日消费直接取平台侧按小时/天分桶的真实账单，因此包含程序启动前的消费。
+// 用户设置（userdata.json）存放在 EXE 同目录；不再保存任何密钥。
 // ============================================================================
 'use strict'
 
-const { app, BrowserWindow, ipcMain, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Menu, shell } = require('electron')
 const path = require('node:path')
-const { createWhaleCore } = require('./lib/core.js')
+const { createWhaleCore, isPeakTime } = require('./lib/core.js')
+const { createPlatformClient, BASE, USAGE_URL } = require('./lib/platform.js')
 
 const isDev = !app.isPackaged
 // portable 单文件版：PORTABLE_EXECUTABLE_DIR 指向便携 EXE 所在目录；
@@ -19,6 +22,15 @@ const exeDir =
   (isDev ? app.getAppPath() : path.dirname(app.getPath('exe')))
 
 const core = createWhaleCore({ dataFile: path.join(exeDir, 'userdata.json') })
+const platform = createPlatformClient({ headless: true })
+
+// 固定会话目录：默认值随「包名」变化（开发态用 package.json 的 name、打包后用
+// productName），会导致**开发时登录的会话在打包版里失效**。这里显式钉死，
+// 让开发态与打包版共用同一份开放平台登录态（也便于定位问题）。
+// 必须在 app ready 之前设置。
+try {
+  app.setPath('userData', path.join(app.getPath('appData'), 'DeepSeekWhaleWidget'))
+} catch (err) {}
 
 let win = null
 let dragState = null
@@ -28,10 +40,100 @@ let moveTimer = null
 const WINDOW_W = 560
 const WINDOW_H = 840
 
+// 平台数据缓存：避免 UI 频繁触发页面加载（平台侧请求本身也做了节流）
+const DATA_TTL_MS = 30000
+let dataCache = null // { at, payload }
+let dataInFlight = null
+
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v
 }
 
+// ---------------------------------------------------------------------------
+// 开机自启
+// ---------------------------------------------------------------------------
+// ★ portable 单文件版是自解压的：process.execPath 指向**临时解压目录**，
+//   每次启动都不同，拿它注册自启必然失效。electron-builder 为此注入了
+//   PORTABLE_EXECUTABLE_FILE（真 EXE 全路径，见其 portable.nsi 模板）。
+function autoStartPath() {
+  if (process.env.PORTABLE_EXECUTABLE_FILE) return process.env.PORTABLE_EXECUTABLE_FILE
+  if (app.isPackaged) return app.getPath('exe')
+  return null // 开发态：不能把 electron.exe 注册成自启项
+}
+
+function getAutoStart() {
+  const p = autoStartPath()
+  if (!p) return { supported: false, enabled: false, reason: '开发态不可用' }
+  try {
+    const s = app.getLoginItemSettings({ path: p })
+    return { supported: true, enabled: !!s.openAtLogin, path: p }
+  } catch (err) {
+    return { supported: false, enabled: false, reason: String(err.message || err) }
+  }
+}
+
+function setAutoStart(enabled) {
+  const p = autoStartPath()
+  if (!p) return { ok: false, error: '开发态不支持开机自启' }
+  try {
+    if (enabled) {
+      app.setLoginItemSettings({ openAtLogin: true, path: p })
+    } else {
+      // 显式清除，避免残留注册表项
+      app.setLoginItemSettings({ openAtLogin: false, path: p })
+    }
+    const now = getAutoStart()
+    return { ok: true, enabled: now.enabled }
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 对外跳转（白名单）
+// ---------------------------------------------------------------------------
+// ★ 只允许打开平台自己的固定地址；绝不把渲染层传来的任意字符串交给系统打开
+const ALLOWED_URLS = new Set([USAGE_URL, BASE + '/top_up', BASE + '/api_keys'])
+
+function openAllowed(url) {
+  if (!ALLOWED_URLS.has(url)) return { ok: false, error: 'URL 不在白名单内' }
+  shell.openExternal(url).catch(() => {})
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
+// 数据获取（带缓存与并发去重）
+// ---------------------------------------------------------------------------
+function fetchData(force) {
+  const now = Date.now()
+  if (!force && dataCache && now - dataCache.at < DATA_TTL_MS) {
+    return Promise.resolve(dataCache.payload)
+  }
+  if (dataInFlight) return dataInFlight
+  dataInFlight = platform
+    .getSnapshot()
+    .then((p) => {
+      if (p && p.ok) {
+        // 附上峰谷标记（气泡文案用），与数据源无关
+        p.isPeak = isPeakTime(Math.floor(Date.now() / 1000))
+        dataCache = { at: Date.now(), payload: p }
+      }
+      return p
+    })
+    .catch((err) => ({
+      ok: false,
+      code: 'ERROR',
+      error: String((err && err.message) || err).slice(0, 200),
+    }))
+    .finally(() => {
+      dataInFlight = null
+    })
+  return dataInFlight
+}
+
+// ---------------------------------------------------------------------------
+// 窗口
+// ---------------------------------------------------------------------------
 // Windows 透明（分层）窗口在 setPosition 时存在尺寸漂移的已知问题：
 // 每次移动窗口都会“长大”几像素（连续拖动时肉眼可见地抽搐+放大）。
 // 因此移动一律用 setBounds 显式钉住宽高；拖动位移用 16ms 帧合并节流。
@@ -96,9 +198,13 @@ function createWindow() {
     } catch (err) {}
   })
 
+  win.on('closed', () => {
+    win = null
+  })
+
   win.loadFile(path.join(app.getAppPath(), 'renderer', 'index.html'))
 
-  // 冒烟测试：node_modules/.bin/electron . --smoke —— 启动 5 秒后自动退出
+  // 冒烟测试：electron . --smoke —— 启动 5 秒后自动退出
   if (process.argv.includes('--smoke')) {
     win.webContents.on('console-message', (e, level, message) => {
       console.log('[renderer:' + level + ']', message)
@@ -106,7 +212,7 @@ function createWindow() {
     setTimeout(async () => {
       try {
         const r = await win.webContents.executeJavaScript(
-          '({ api: !!window.whaleAPI, widget: !!window.__dshWhaleWidget, root: !!document.querySelector(".dshwv-root"), img: !!document.querySelector(".dshwv-img"), apiKeyInput: !!document.querySelector(".dshwv-secret") })'
+          '({ api: !!window.whaleAPI, widget: !!window.__dshWhaleWidget, root: !!document.querySelector(".dshwv-root"), img: !!document.querySelector(".dshwv-img"), autostartRow: !!document.querySelector(".dshwv-autostart"), loginRow: !!document.querySelector(".dshwv-login") })'
         )
         console.log('SMOKE RENDERER: ' + JSON.stringify(r))
       } catch (err) {
@@ -133,14 +239,55 @@ function animateWindowTo(tx, ty) {
 }
 
 // ---------------------------------------------------------------------------
+// 右键菜单
+// ---------------------------------------------------------------------------
+function showContextMenu(pos) {
+  if (!win) return
+  const auto = getAutoStart()
+  const items = [
+    { label: '查看用量详情', click: () => openAllowed(USAGE_URL) },
+    {
+      label: auto.supported && auto.enabled ? '开机自启 ✓' : '开机自启',
+      enabled: auto.supported,
+      click: () => {
+        const next = !(auto.supported && auto.enabled)
+        const r = setAutoStart(next)
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('whale:autostartChanged', { enabled: !!(r && r.enabled) })
+        }
+      },
+    },
+    { label: '设置…', click: () => win && !win.isDestroyed() && win.webContents.send('whale:openSettings') },
+    { label: '重新登录开放平台', click: () => platform.openLogin().catch(() => {}) },
+    { type: 'separator' },
+    { label: '退出小鲸鱼', click: () => app.quit() },
+  ]
+  const menu = Menu.buildFromTemplate(items)
+  const opts = { window: win }
+  if (pos && isFinite(pos.x) && isFinite(pos.y)) {
+    opts.x = Math.round(pos.x)
+    opts.y = Math.round(pos.y)
+  }
+  menu.popup(opts)
+}
+
+// ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
-ipcMain.handle('whale:getConfig', () => core.getConfig())
+ipcMain.handle('whale:getConfig', () => {
+  const cfg = core.getConfig()
+  return { ...cfg, autoStart: getAutoStart() }
+})
 ipcMain.handle('whale:saveConfig', (e, cfg) => core.saveConfig(cfg))
-ipcMain.handle('whale:setApiKey', (e, key) => core.setApiKey(String(key || '')))
-ipcMain.handle('whale:setPlatformToken', (e, token) => core.setPlatformToken(String(token || '')))
-ipcMain.handle('whale:fetchBalance', () => core.getBalance())
-ipcMain.handle('whale:fetchLastTurn', () => core.fetchLastTurn())
+ipcMain.handle('whale:fetchData', (e, force) => fetchData(!!force))
+ipcMain.handle('whale:openLogin', () => platform.openLogin().catch((err) => ({ ok: false, error: String(err) })))
+ipcMain.handle('whale:openDetails', () => openAllowed(USAGE_URL))
+ipcMain.handle('whale:contextMenu', (e, pos) => {
+  showContextMenu(pos)
+  return { ok: true }
+})
+ipcMain.handle('whale:setAutoStart', (e, enabled) => setAutoStart(!!enabled))
+ipcMain.handle('whale:getAutoStart', () => getAutoStart())
 ipcMain.handle('whale:quit', () => app.quit())
 
 // 鼠标穿透：透明区域忽略鼠标事件（forward 保留 mousemove 供渲染层检测悬停）
@@ -232,6 +379,9 @@ if (!gotLock) {
   })
 
   app.on('window-all-closed', () => {
+    try {
+      platform.destroy()
+    } catch (err) {}
     app.quit()
   })
 }

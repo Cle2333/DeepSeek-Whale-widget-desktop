@@ -63,11 +63,12 @@ var css = [
   '.dshwv-check{width:16px;height:16px;accent-color:#203170;cursor:pointer;flex:0 0 auto}',
   '.dshwv-menu-sep{height:1px;background:rgba(32,49,112,.25);margin:6px 0}',
   '.dshwv-volpct{width:44px;text-align:right;color:#203170;font-size:12px}',
-  '.dshwv-secret{flex:1;min-width:0;border:1px solid rgba(32,49,112,.4);border-radius:6px;padding:3px 6px;font-size:12px;color:#203170;background:#fff;box-sizing:border-box}',
-  '.dshwv-secret::placeholder{color:#9fb0d9}',
   '.dshwv-btn{border:1px solid rgba(32,49,112,.4);border-radius:6px;background:rgba(32,49,112,.08);color:#203170;font-size:12px;padding:3px 8px;cursor:pointer;flex:0 0 auto}',
   '.dshwv-btn:hover{background:rgba(32,49,112,.16)}',
   '.dshwv-quit{margin:2px 0 0;width:100%;padding:5px 0;border:1px solid rgba(224,67,63,.45);border-radius:6px;background:rgba(224,67,63,.06);color:#e0433f;font-size:12px;cursor:pointer}',
+  '.dshwv-login{color:#203170}',
+  '.dshwv-login-state{flex:1;text-align:right;font-size:12px;color:#9fb0d9;padding-right:2px}',
+  '.dshwv-login-state.dshwv-login-ok{color:#2fa24c}',
   '.dshwv-quit:hover{background:rgba(224,67,63,.14)}'
 ].join('\n')
 
@@ -144,11 +145,6 @@ function soundOpt(value, label) {
 soundSelect.appendChild(soundOpt('duck', '小黄鸭'))
 soundSelect.appendChild(soundOpt('fx1', '音效1'))
 soundSelect.addEventListener('change', function () { setSoundSet(soundSelect.value) })
-var usageSelect = document.createElement('select')
-usageSelect.className = 'dshwv-sound'
-usageSelect.appendChild(soundOpt('ledger', '小鲸鱼记账 (推荐)'))
-usageSelect.appendChild(soundOpt('token', '实时·令牌 (需平台令牌)'))
-usageSelect.addEventListener('change', function () { setUsageMode(usageSelect.value) })
 var peakSelect = document.createElement('select')
 peakSelect.className = 'dshwv-sound'
 peakSelect.appendChild(soundOpt('default', '默认'))
@@ -183,9 +179,6 @@ var row3 = menuRow()
 row3.appendChild(menuLabel('音量'))
 row3.appendChild(volInput)
 row3.appendChild(volPct)
-var row4 = menuRow()
-row4.appendChild(menuLabel('用量'))
-row4.appendChild(usageSelect)
 var row5 = menuRow()
 row5.appendChild(menuLabel('峰谷'))
 row5.appendChild(peakSelect)
@@ -194,67 +187,31 @@ row6.appendChild(menuLabel('气泡'))
 row6.appendChild(bubbleToggle)
 var menuSep1 = document.createElement('div')
 menuSep1.className = 'dshwv-menu-sep'
-// —— API_KEY / 平台令牌（桌面版专用：凭据只进主进程，AES 加密写入 userdata.json）——
-function secretInput(placeholder) {
-  var inp = document.createElement('input')
-  inp.type = 'password'
-  inp.className = 'dshwv-secret'
-  inp.placeholder = placeholder
-  inp.autocomplete = 'off'
-  inp.spellcheck = false
-  return inp
-}
-function secretSaveBtn(label) {
-  var btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = 'dshwv-btn'
-  btn.textContent = label
-  return btn
-}
-var apiKeyInput = secretInput('sk-... 未配置')
-var apiKeySave = secretSaveBtn('保存')
-function saveApiKey() {
-  var v = apiKeyInput.value.trim()
-  if (!v) { apiKeyInput.focus(); return }
-  apiKeySave.disabled = true
-  API.setApiKey(v).then(function (r) {
-    apiKeyInput.value = ''
-    apiKeyInput.placeholder = (r && r.ok) ? '已保存 ✓' : '保存失败'
-    apiKeySave.disabled = false
-    refresh(true)
-  }).catch(function () {
-    apiKeyInput.placeholder = '保存失败'
-    apiKeySave.disabled = false
-  })
-}
-apiKeySave.addEventListener('click', saveApiKey)
-apiKeyInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') saveApiKey() })
-var tokenInput = secretInput('未配置 (可选)')
-var tokenSave = secretSaveBtn('保存')
-function saveToken() {
-  var v = tokenInput.value.trim()
-  if (!v) { tokenInput.focus(); return }
-  tokenSave.disabled = true
-  API.setPlatformToken(v).then(function (r) {
-    tokenInput.value = ''
-    tokenInput.placeholder = (r && r.ok) ? '已保存 ✓' : '保存失败'
-    tokenSave.disabled = false
-    refresh(true)
-  }).catch(function () {
-    tokenInput.placeholder = '保存失败'
-    tokenSave.disabled = false
-  })
-}
-tokenSave.addEventListener('click', saveToken)
-tokenInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') saveToken() })
+// —— 开放平台登录状态（数据走平台会话，无需 API key）——
+var loginStateEl = document.createElement('span')
+loginStateEl.className = 'dshwv-login-state'
+loginStateEl.textContent = '未登录'
+var loginBtn = document.createElement('button')
+loginBtn.type = 'button'
+loginBtn.className = 'dshwv-btn'
+loginBtn.textContent = '去登录'
+loginBtn.title = '打开开放平台登录窗口'
+loginBtn.addEventListener('click', function () { API.openLogin() })
 var row7 = menuRow()
-row7.appendChild(menuLabel('API_KEY'))
-row7.appendChild(apiKeyInput)
-row7.appendChild(apiKeySave)
+row7.className = 'dshwv-menu-row dshwv-login'
+row7.appendChild(menuLabel('开放平台'))
+row7.appendChild(loginStateEl)
+row7.appendChild(loginBtn)
+// —— 开机自启 ——
+var autostartToggle = document.createElement('input')
+autostartToggle.type = 'checkbox'
+autostartToggle.className = 'dshwv-check'
+autostartToggle.title = '开机时自动启动小鲸鱼'
+autostartToggle.addEventListener('change', function () { applyAutoStart(autostartToggle.checked) })
 var row8 = menuRow()
-row8.appendChild(menuLabel('平台令牌'))
-row8.appendChild(tokenInput)
-row8.appendChild(tokenSave)
+row8.className = 'dshwv-menu-row dshwv-autostart'
+row8.appendChild(menuLabel('开机自启'))
+row8.appendChild(autostartToggle)
 var menuSep2 = document.createElement('div')
 menuSep2.className = 'dshwv-menu-sep'
 var quitBtn = document.createElement('button')
@@ -268,7 +225,6 @@ row9.appendChild(quitBtn)
 menuBox.appendChild(row1)
 menuBox.appendChild(row2)
 menuBox.appendChild(row3)
-menuBox.appendChild(row4)
 menuBox.appendChild(row5)
 menuBox.appendChild(row6)
 menuBox.appendChild(menuSep1)
@@ -661,17 +617,18 @@ function refresh(manual) {
   busy = true
   if (animDelayTimer) { clearTimeout(animDelayTimer); animDelayTimer = null }
   if (manual || state.balance === null) { state.status = 'loading'; render() }
-  API.fetchBalance()
+  API.fetchData(!!manual)
     .then(function (data) {
       if (data && data.ok) {
-        var nb = Number(data.totalBalance)
+        updateLoginState(true)
+        var nb = Number(data.balance)
         var nc = String(data.currency || 'CNY')
         var changed = state.balance !== null && (nb !== state.balance || nc !== state.currency)
         var currencyChanged = state.currency !== null && nc !== state.currency
         state.balance = nb
         state.currency = nc
         state.message = ''
-        state.todayUsage = data.todayUsage !== undefined ? data.todayUsage : null
+        state.todayUsage = (data.todayCost === undefined || data.todayCost === null) ? null : Number(data.todayCost)
         state.isPeak = !!data.isPeak
         if (changed && !currencyChanged) {
           if (!manual) {
@@ -699,8 +656,11 @@ function refresh(manual) {
           render()
         }
       } else {
+        var code = data && data.code
+        var needLogin = code === 'NEED_LOGIN' || code === 'AUTH_EXPIRED'
+        if (needLogin) updateLoginState(false)
         state.status = 'error'
-        state.message = (data && data.error) ? String(data.error) : '获取失败'
+        state.message = needLogin ? '需登录开放平台' : ((data && data.error) ? String(data.error) : '获取失败')
         render()
       }
     })
@@ -716,8 +676,9 @@ function refresh(manual) {
 var soundOn = true
 var soundVol = 0.9
 var soundSet = 'duck'
-var usageMode = 'ledger'
 var peakMode = 'default'
+var loginOk = false
+var autoStartSupported = false
 var bubbleOn = true
 // 桌面版无 DSH 会话事件，「每轮对话消耗」功能不可用，保持关闭
 var turnCostOn = false
@@ -732,7 +693,6 @@ function saveConfig() {
       sound: soundOn,
       vol: soundVol,
       soundSet: soundSet,
-      usageMode: usageMode,
       peakMode: peakMode,
       bubbleOn: bubbleOn,
       scrollGapOn: scrollGapOn,
@@ -740,12 +700,6 @@ function saveConfig() {
       pos: { hAnchor: state.h, vAnchor: state.v }
     })
   } catch (err) {}
-}
-function setUsageMode(v) {
-  usageMode = v === 'token' ? 'token' : 'ledger'
-  usageSelect.value = usageMode
-  saveConfig()
-  refresh(false)
 }
 function setPeakMode(v) {
   peakMode = v === 'liangwen' || v === 'qiangqiang' ? v : 'default'
@@ -758,6 +712,30 @@ function setBubbleOn(v) {
   saveConfig()
   // 必须走 hideCostBubble：残留的 costBubbleActive 会让 render()/showBubble() 永久早退
   if (!bubbleOn) hideCostBubble()
+}
+// 登录态显示（数据来自开放平台会话，不再有 API key）
+function updateLoginState(ok) {
+  loginOk = !!ok
+  loginStateEl.textContent = ok ? '已登录 ✓' : '未登录'
+  loginStateEl.className = 'dshwv-login-state' + (ok ? ' dshwv-login-ok' : '')
+  loginBtn.textContent = ok ? '重登' : '去登录'
+}
+// 开机自启：勾选状态以主进程返回的实际注册结果为准
+function applyAutoStart(want) {
+  if (!autoStartSupported) {
+    autostartToggle.checked = false
+    return
+  }
+  autostartToggle.disabled = true
+  API.setAutoStart(!!want).then(function (r) {
+    autostartToggle.disabled = false
+    var on = !!(r && r.ok && r.enabled)
+    autostartToggle.checked = on
+    autostartToggle.title = r && r.ok ? '开机时自动启动小鲸鱼' : ('设置失败：' + ((r && r.error) || '未知'))
+  }).catch(function () {
+    autostartToggle.disabled = false
+    autostartToggle.checked = false
+  })
 }
 function scaleToDisplay(s) {
   return Math.round((s - MIN_SCALE) / ((MAX_SCALE - MIN_SCALE) / 19)) + 1
@@ -1023,6 +1001,14 @@ function onDocClickStopper(e) {
 document.addEventListener('pointerdown', onDocPointerDown, true)
 document.addEventListener('click', onDocClickStopper, true)
 
+// —— 右键菜单（主进程原生菜单；透明区不响应，照常穿透）——
+function onContextMenu(e) {
+  if (!isWhaleHit(e)) return
+  try { e.preventDefault(); e.stopPropagation() } catch (err) {}
+  API.contextMenu({ x: e.clientX, y: e.clientY })
+}
+document.addEventListener('contextmenu', onContextMenu, true)
+
 var widgetCursor = ''
 function setWidgetCursor(v) {
   if (v !== widgetCursor) {
@@ -1072,6 +1058,10 @@ applySoundSet()
 setupHitTest()
 // 启动即开启鼠标穿透（forward 保留 mousemove，悬停鲸鱼时再取消穿透）
 if (API.setIgnore) API.setIgnore(true)
+updateLoginState(false)
+// 右键菜单的「设置…」打开这个面板；「开机自启」勾选变化同步回 UI
+if (API.onOpenSettings) API.onOpenSettings(function () { if (!menuOpen) toggleMenu() })
+if (API.onAutostartChanged) API.onAutostartChanged(function (p) { autostartToggle.checked = !!(p && p.enabled) })
 API.getConfig()
   .then(function (d) {
     if (!d) return
@@ -1096,9 +1086,13 @@ API.getConfig()
       soundSelect.value = soundSet
       applySoundSet()
     }
-    if (typeof d.usageMode === 'string') {
-      usageMode = d.usageMode === 'token' ? 'token' : 'ledger'
-      usageSelect.value = usageMode
+    if (d.autoStart && typeof d.autoStart === 'object') {
+      autoStartSupported = !!d.autoStart.supported
+      autostartToggle.checked = !!d.autoStart.enabled
+      autostartToggle.disabled = !autoStartSupported
+      autostartToggle.title = autoStartSupported
+        ? '开机时自动启动小鲸鱼'
+        : ('开发态不可用：' + (d.autoStart.reason || '未打包'))
     }
     if (typeof d.peakMode === 'string') {
       peakMode = d.peakMode === 'liangwen' || d.peakMode === 'qiangqiang' ? d.peakMode : 'default'
@@ -1107,12 +1101,6 @@ API.getConfig()
     if (typeof d.bubbleOn === 'boolean') {
       bubbleOn = d.bubbleOn
       bubbleToggle.checked = bubbleOn
-    }
-    if (d.hasApiKey !== undefined) {
-      apiKeyInput.placeholder = d.hasApiKey ? '已配置 (修改后保存覆盖)' : 'sk-... 未配置'
-    }
-    if (d.hasPlatformToken !== undefined) {
-      tokenInput.placeholder = d.hasPlatformToken ? '已配置 (修改后保存覆盖)' : '未配置 (可选)'
     }
     if (d.pos && (d.pos.hAnchor === 'left' || d.pos.hAnchor === 'right')) {
       state.h = d.pos.hAnchor
