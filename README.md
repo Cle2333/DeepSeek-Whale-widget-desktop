@@ -176,7 +176,6 @@ process.execPath         = C:\Users\...\AppData\Local\Temp\3Jo97...\...exe     �
 ```text
 ├── LICENSE                        # MIT（含两位原作者版权行）
 ├── README.md
-├── whale-widget-prompt.md         # 原版完整规格提示词（保留作参考）
 ├── assets/DSH2.png                # README 展示图
 ├── package.json                   # Electron + electron-builder 配置
 ├── pnpm-workspace.yaml            # pnpm 构建脚本放行白名单
@@ -193,7 +192,9 @@ process.execPath         = C:\Users\...\AppData\Local\Temp\3Jo97...\...exe     �
 │   ├── prepare-electron.mjs       # 打包前给 electron 打图标/版本补丁
 │   ├── fix-electron-dist.mjs      # 修复 Node 26 下 electron 二进制解压失败
 │   ├── probe-platform.js          # 平台接口探测工具
-│   └── test-app-data.js           # 数据链路验证
+│   ├── test-app-data.js           # 数据链路验证
+│   ├── test-platform.js           # 平台数据层单独验证
+│   └── verify-round3.js           # 取数入口白名单 / 登录路径判定断言
 └── build/
     ├── icon.ico
     └── tools/rcedit-x64.exe       # 第三方工具（来源 electron-builder 官方 binaries 包）
