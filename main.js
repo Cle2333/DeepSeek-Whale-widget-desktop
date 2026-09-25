@@ -96,6 +96,38 @@ function setAutoStart(enabled) {
 // 只允许打开固定的平台地址（不接受渲染层传入的任意 URL）。
 let detailWin = null
 
+// 是否属于平台自身站点。
+// 用 URL 解析比对 hostname（不能简单 includes —— "https://platform.deepseek.com.evil.com"
+// 这种字符串会骗过 includes 判断）。
+function isPlatformUrl(u) {
+  try {
+    const x = new URL(u)
+    const host = new URL(BASE).hostname
+    return x.protocol === 'https:' && x.hostname === host
+  } catch (err) {
+    return false
+  }
+}
+
+// 给「能看到登录态」的窗口统一加导航围栏：
+//   1. 不允许页面开新窗口（window.open / target=_blank / 弹窗）
+//   2. 不允许顶层导航到站外（点站内链接仍可正常用）
+//   3. 不允许挂 webview
+function lockDownWindow(wc, label) {
+  try {
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }))
+  } catch (err) {}
+  const guard = (e, url) => {
+    if (!isPlatformUrl(url)) {
+      e.preventDefault()
+      console.log(`[${label}] 已拦截站外导航:`, String(url).slice(0, 160))
+    }
+  }
+  wc.on('will-navigate', guard)
+  wc.on('will-redirect', guard)
+  wc.on('will-attach-webview', (e) => e.preventDefault())
+}
+
 function openDetails() {
   if (detailWin && !detailWin.isDestroyed()) {
     if (detailWin.isMinimized()) detailWin.restore()
@@ -124,6 +156,7 @@ function openDetails() {
     })
     // 页面自身的 <title> 会覆盖窗口标题，这里保留我们设定的标题（便于识别）
     detailWin.on('page-title-updated', (e) => e.preventDefault())
+    lockDownWindow(detailWin.webContents, 'details')
     detailWin.loadURL(USAGE_URL)
     return { ok: true }
   } catch (err) {
@@ -300,6 +333,24 @@ function createWindow() {
         }
         const dr2 = openDetails()
         console.log('SMOKE CHECK 复用同一窗口: ' + JSON.stringify(dr2))
+
+        // 4) 安全围栏：详情窗口不得开新窗口、不得导航到站外
+        if (detailWin && !detailWin.isDestroyed()) {
+          const winCountBefore = BrowserWindow.getAllWindows().length
+          const openRes = await detailWin.webContents
+            .executeJavaScript("(() => { const w = window.open('https://example.com'); return !!w })()", true)
+            .catch((e) => 'ERR ' + e.message)
+          await detailWin.webContents
+            .executeJavaScript("location.href = 'https://example.com'", true)
+            .catch(() => {})
+          await new Promise((s) => setTimeout(s, 2500))
+          const urlNow = detailWin.webContents.getURL()
+          const winCountAfter = BrowserWindow.getAllWindows().length
+          console.log('SMOKE CHECK window.open 被拦(应为 false): ' + openRes)
+          console.log(`SMOKE CHECK 窗口数未增加: ${winCountBefore} → ${winCountAfter} = ${winCountBefore === winCountAfter}`)
+          console.log('SMOKE CHECK 站外导航被拦(URL 仍在平台站): ' + /platform\.deepseek\.com/.test(urlNow))
+          console.log('SMOKE CHECK 当前 URL: ' + urlNow)
+        }
       } catch (err) {
         console.log('SMOKE RENDERER ERROR: ' + err.message)
       }
