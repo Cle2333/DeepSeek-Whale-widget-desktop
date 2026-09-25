@@ -16,10 +16,8 @@ contextBridge.exposeInMainWorld('whaleAPI', {
   // 数据（走开放平台会话，无需 API key）
   fetchData: (force) => ipcRenderer.invoke('whale:fetchData', force),
   openLogin: () => ipcRenderer.invoke('whale:openLogin'),
-  openDetails: () => ipcRenderer.invoke('whale:openDetails'),
 
   // 开机自启
-  getAutoStart: () => ipcRenderer.invoke('whale:getAutoStart'),
   setAutoStart: (enabled) => ipcRenderer.invoke('whale:setAutoStart', enabled),
 
   // 右键菜单（主进程原生菜单）
@@ -33,5 +31,4 @@ contextBridge.exposeInMainWorld('whaleAPI', {
 
   // 主进程 → 渲染层
   onOpenSettings: (cb) => ipcRenderer.on('whale:openSettings', () => cb()),
-  onAutostartChanged: (cb) => ipcRenderer.on('whale:autostartChanged', (e, p) => cb(p)),
 })

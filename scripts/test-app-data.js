@@ -9,6 +9,10 @@ const path = require('node:path')
 app.setPath('userData', path.join(app.getPath('appData'), 'DeepSeekWhaleWidget'))
 
 const { createPlatformClient } = require('../lib/platform.js')
+// 峰谷要在这里自己算：getSnapshot() **不返回** isPeak —— 那是 main.js 的 fetchData
+// 拿到 payload 后另外附加的字段（早期版本这里读 snap.isPeak 恒为 undefined，
+// 于是诊断输出永远打印「谷时」，是个误导性的死分支）
+const { isPeakTime } = require('../lib/core.js')
 
 const SHOW = process.argv.includes('--show')
 
@@ -44,7 +48,7 @@ app.whenReady().then(async () => {
     console.log('余额      :', snap.balance)
     console.log('赠送余额  :', snap.bonusBalance)
     console.log('今日消费  :', snap.todayCost)
-    console.log('峰谷      :', snap.isPeak ? '高峰' : '谷时')
+    console.log('峰谷      :', isPeakTime(Math.floor(Date.now() / 1000)) ? '高峰' : '谷时')
     console.log('今日明细  :', JSON.stringify(snap.todayByKey || {}))
   }
   const st = await pc.pageState()

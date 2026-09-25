@@ -158,7 +158,11 @@ function openDetails() {
     // 页面自身的 <title> 会覆盖窗口标题，这里保留我们设定的标题（便于识别）
     detailWin.on('page-title-updated', (e) => e.preventDefault())
     lockDownWindow(detailWin.webContents, 'details')
-    detailWin.loadURL(USAGE_URL)
+    // loadURL 失败会**异步 reject**，外层 try/catch 只能捕获同步异常，须显式处理，
+    // 否则会产生未处理的 Promise rejection
+    detailWin.loadURL(USAGE_URL).catch((err) => {
+      console.log('[details] 页面加载失败:', String((err && err.message) || err).slice(0, 160))
+    })
     return { ok: true }
   } catch (err) {
     detailWin = null
@@ -314,7 +318,6 @@ function createWindow() {
         console.log('SMOKE CHECK menuBtn(应为 false): ' + r.menuBtn)
 
         // 2) 设置面板：模拟右键菜单里的「设置…」→ 渲染层应打开面板
-        await win.webContents.executeJavaScript("window.dispatchEvent(new Event('x'))", true)
         win.webContents.send('whale:openSettings')
         await new Promise((s) => setTimeout(s, 600))
         const panelOpen = await win.webContents.executeJavaScript(
@@ -378,14 +381,17 @@ function createWindow() {
         const auto0 = getAutoStart()
         console.log('SMOKE CHECK autoStart 初始: ' + JSON.stringify(auto0))
         if (auto0.supported) {
+          const wasOn = !!auto0.enabled
           const on = setAutoStart(true)
-          const chk1 = getAutoStart()
           console.log('SMOKE CHECK 开启自启: ' + JSON.stringify(on))
-          console.log('SMOKE CHECK 回读(应为 true): ' + JSON.stringify(chk1))
+          console.log('SMOKE CHECK 回读(应为 true): ' + JSON.stringify(getAutoStart()))
           const off = setAutoStart(false)
-          const chk2 = getAutoStart()
           console.log('SMOKE CHECK 关闭自启: ' + JSON.stringify(off))
-          console.log('SMOKE CHECK 回读(应为 false): ' + JSON.stringify(chk2))
+          console.log('SMOKE CHECK 回读(应为 false): ' + JSON.stringify(getAutoStart()))
+          // ★ 冒烟测试不得改动用户真实的自启状态：
+          //   若测试前用户是开着的，这里必须恢复，否则「跑个测试把自启关了」
+          if (wasOn) setAutoStart(true)
+          console.log('SMOKE CHECK 已恢复初始状态: ' + JSON.stringify(getAutoStart()))
         } else {
           console.log('SMOKE CHECK 自启不可用（开发态）: ' + (auto0.reason || ''))
         }
@@ -444,13 +450,11 @@ ipcMain.handle('whale:getConfig', () => {
 ipcMain.handle('whale:saveConfig', (e, cfg) => core.saveConfig(cfg))
 ipcMain.handle('whale:fetchData', (e, force) => fetchData(!!force))
 ipcMain.handle('whale:openLogin', () => platform.openLogin().catch((err) => ({ ok: false, error: String(err) })))
-ipcMain.handle('whale:openDetails', () => openDetails())
 ipcMain.handle('whale:contextMenu', (e, pos) => {
   showContextMenu(pos)
   return { ok: true }
 })
 ipcMain.handle('whale:setAutoStart', (e, enabled) => setAutoStart(!!enabled))
-ipcMain.handle('whale:getAutoStart', () => getAutoStart())
 ipcMain.handle('whale:quit', () => app.quit())
 
 // 鼠标穿透：透明区域忽略鼠标事件（forward 保留 mousemove 供渲染层检测悬停）

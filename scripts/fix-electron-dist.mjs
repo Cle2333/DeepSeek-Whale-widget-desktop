@@ -20,7 +20,6 @@ import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..')
 
 function log(...a) {
   console.log('[fix-electron]', ...a)
@@ -50,7 +49,15 @@ if (fs.existsSync(exePath) && fs.existsSync(pathTxt)) {
 }
 
 // --- 在缓存里找对应的 zip ---
-const arch = process.arch === 'arm64' ? 'arm64' : process.arch === 'ia32' ? 'ia32' : 'x64'
+// 只支持 electron 官方发布过的架构；不认识的架构**直接失败**，
+// 不能静默按 x64 找 —— 那样会解出错误架构的二进制，而末尾的
+// existsSync 校验照样通过（文件在但跑不起来），故障被掩盖
+const SUPPORTED_ARCHS = ['x64', 'arm64', 'ia32']
+if (!SUPPORTED_ARCHS.includes(process.arch)) {
+  log(`不支持的架构 ${process.arch}，请手动解压 electron 二进制。`)
+  process.exit(1)
+}
+const arch = process.arch
 const platName = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
 const zipName = `electron-v${version}-${platName}-${arch}.zip`
 
@@ -78,7 +85,10 @@ if (!zipPath) {
   log(`缓存中未找到 ${zipName}`)
   log('请先执行： node node_modules/electron/install.js   （它会下载到缓存）')
   log('然后重新运行本脚本。')
-  process.exit(0)
+  // ★ 这里必须非零退出：能走到这说明二进制确实缺失（上面的存在性校验没过），
+  //   若 exit(0) 会让 `pnpm install` 误判成功，故障被推迟到运行期才以
+  //   "Electron failed to install correctly" 暴露，排查成本更高
+  process.exit(1)
 }
 log('使用缓存包:', zipPath, `(${(fs.statSync(zipPath).size / 1048576).toFixed(1)} MB)`)
 
@@ -103,7 +113,13 @@ const attempts =
         ['tar', ['-xf', zipPath, '-C', distDir, '--force-local']],
         [
           'powershell',
-          ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${distDir}' -Force`],
+          [
+            '-NoProfile',
+            '-Command',
+            // 单引号在 PowerShell 里需**双写**转义：路径含 ' 时（用户目录/自定义缓存路径）
+            // 会把字符串提前闭合、命令被截断
+            `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${distDir.replace(/'/g, "''")}' -Force`,
+          ],
         ],
       ]
     : [

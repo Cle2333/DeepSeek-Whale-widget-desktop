@@ -665,7 +665,6 @@ var soundOn = true
 var soundVol = 0.9
 var soundSet = 'duck'
 var peakMode = 'default'
-var loginOk = false
 var autoStartSupported = false
 var bubbleOn = true
 // 桌面版无 DSH 会话事件，「每轮对话消耗」功能不可用，保持关闭
@@ -703,7 +702,6 @@ function setBubbleOn(v) {
 }
 // 登录态显示（数据来自开放平台会话，不再有 API key）
 function updateLoginState(ok) {
-  loginOk = !!ok
   loginStateEl.textContent = ok ? '已登录 ✓' : '未登录'
   loginStateEl.className = 'dshwv-login-state' + (ok ? ' dshwv-login-ok' : '')
   loginBtn.textContent = ok ? '重登' : '去登录'
@@ -1045,7 +1043,6 @@ if (API.setIgnore) API.setIgnore(true)
 updateLoginState(false)
 // 右键菜单的「设置…」打开这个面板；「开机自启」勾选变化同步回 UI
 if (API.onOpenSettings) API.onOpenSettings(function () { if (!menuOpen) toggleMenu() })
-if (API.onAutostartChanged) API.onAutostartChanged(function (p) { autostartToggle.checked = !!(p && p.enabled) })
 API.getConfig()
   .then(function (d) {
     if (!d) return

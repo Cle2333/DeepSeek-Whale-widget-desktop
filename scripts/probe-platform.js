@@ -17,7 +17,7 @@
 //   npx electron scripts/probe-platform.js           # 已登录则静默取数
 //   npx electron scripts/probe-platform.js --show    # 需要登录时显示窗口
 //
-// 输出：控制台 + probe-out.json（接口数据与结构，不含任何凭据）
+// 输出：控制台 + probe-out.json（接口数据与结构；**不含凭据类接口的响应体**）
 // 注意：用 `npx electron <script>` 运行时 app 名是 "Electron"，
 //       故 userData 落在 %APPDATA%\Electron（打包后才会用本包名）。
 // ============================================================================
@@ -208,7 +208,11 @@ function finish(state, st) {
       bizKeys: c.json && c.json.data && c.json.data.biz_data ? Object.keys(c.json.data.biz_data) : null,
       error: c.error || null,
     })),
-    data: collected.filter((c) => c.json).map((c) => ({ path: c.url.replace(BASE, ''), json: c.json })),
+    // ★ 落盘时排除 users/get_api_keys 的响应体：它含 API key 名称与掩码 id，
+    //   属凭据相关信息（文件头承诺「不含凭据类接口的响应体」，这里要真的做到）
+    data: collected
+      .filter((c) => c.json && !/users\/get_api_keys/.test(c.url))
+      .map((c) => ({ path: c.url.replace(BASE, ''), json: c.json })),
   }
   fs.writeFileSync(OUT, JSON.stringify(summary, null, 2), 'utf8')
 
