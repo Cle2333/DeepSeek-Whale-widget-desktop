@@ -185,7 +185,22 @@ loginBtn.type = 'button'
 loginBtn.className = 'dshwv-btn'
 loginBtn.textContent = '去登录'
 loginBtn.title = '打开开放平台登录窗口'
-loginBtn.addEventListener('click', function () { API.openLogin() })
+loginBtn.addEventListener('click', function () {
+  API.openLogin().then(function (r) {
+    if (r && r.ok === false) {
+      loginStateEl.textContent = '登录窗打开失败'
+      loginStateEl.title = (r && r.error) || ''
+      return
+    }
+    loginStateEl.textContent = '等待登录…'
+    // 登录成功后 updateLoginState(true) 会清掉这个定时器；
+    // 这样不必等 60 秒轮询才把状态刷成「已登录 ✓」
+    if (loginWatchTimer) clearInterval(loginWatchTimer)
+    loginWatchTimer = setInterval(function () { refresh(true) }, 5000)
+  }).catch(function () {
+    loginStateEl.textContent = '登录窗打开失败'
+  })
+})
 var row7 = menuRow()
 row7.className = 'dshwv-menu-row dshwv-login'
 row7.appendChild(menuLabel('开放平台'))
@@ -196,6 +211,9 @@ var autostartToggle = document.createElement('input')
 autostartToggle.type = 'checkbox'
 autostartToggle.className = 'dshwv-check'
 autostartToggle.title = '开机时自动启动小鲸鱼'
+// 先禁用：autoStartSupported 要等 getConfig() 异步返回才知道，
+// 期间若可点击，applyAutoStart 会走「不支持」分支把勾选静默复位，用户操作被无提示吞掉
+autostartToggle.disabled = true
 autostartToggle.addEventListener('change', function () { applyAutoStart(autostartToggle.checked) })
 var row8 = menuRow()
 row8.className = 'dshwv-menu-row dshwv-autostart'
@@ -299,6 +317,7 @@ var state = {
   todayUsage: null,
   isPeak: false,
   status: 'loading',
+  loggingIn: false,
   message: ''
 }
 var busy = false
@@ -533,6 +552,9 @@ function rightGap() {
   return scrollGapPx > 0 ? scrollGapPx : 0
 }
 function fmt(balance, currency) {
+  // null / undefined / 空串必须显式判掉：Number(null) === 0，
+  // 否则「取数失败」会被显示成 ¥ 0.00，与提示行的 -- 自相矛盾
+  if (balance === null || balance === undefined || balance === '') return '--'
   var num = Number(balance)
   var fixed = isFinite(num) ? num.toFixed(2) : '--'
   return currency === 'CNY' ? '¥ ' + fixed : fixed + ' ' + currency
@@ -568,7 +590,10 @@ function render() {
   // 消耗金额泡泡显示期间，余额渲染不覆盖其内容（金额行/标题行/提示行）
   if (costBubbleActive) return
   var amount, hint
-  if (state.status === 'error') {
+  if (state.loggingIn) {
+    amount = shown !== null ? fmt(shown, state.currency) : '…'
+    hint = '登录中…'
+  } else if (state.status === 'error') {
     amount = shown !== null ? fmt(shown, state.currency) : '--'
     hint = state.message ? state.message.slice(0, 14) : '获取失败 · 点击重试'
   } else if (state.balance === null) {
@@ -609,7 +634,16 @@ function refresh(manual) {
     .then(function (data) {
       if (data && data.ok) {
         updateLoginState(true)
+        state.loggingIn = false
         var nb = Number(data.balance)
+        // 非有限值直接判失败：否则下面 `nb !== state.balance` 因 NaN !== NaN 恒为真，
+        // 每次轮询都会触发 showBubble + 滚动动画（持续闪烁）
+        if (!isFinite(nb)) {
+          state.status = 'error'
+          state.message = '余额数据异常'
+          render()
+          return
+        }
         var nc = String(data.currency || 'CNY')
         var changed = state.balance !== null && (nb !== state.balance || nc !== state.currency)
         var currencyChanged = state.currency !== null && nc !== state.currency
@@ -645,11 +679,20 @@ function refresh(manual) {
         }
       } else {
         var code = data && data.code
-        var needLogin = code === 'NEED_LOGIN' || code === 'AUTH_EXPIRED'
-        if (needLogin) updateLoginState(false)
-        state.status = 'error'
-        state.message = needLogin ? '需登录开放平台' : ((data && data.error) ? String(data.error) : '获取失败')
-        render()
+        if (code === 'LOGGING_IN') {
+          // 用户正在登录窗口里操作：保持「登录中」而不是报错
+          state.status = 'loading'
+          state.loggingIn = true
+          render()
+        } else {
+          state.loggingIn = false
+          var needLogin = code === 'NEED_LOGIN' || code === 'AUTH_EXPIRED'
+          if (needLogin) updateLoginState(false)
+          state.status = 'error'
+          if (needLogin) state.message = '需登录开放平台'
+          else state.message = (data && data.error) ? String(data.error) : '获取失败'
+          render()
+        }
       }
     })
     .catch(function () {
@@ -701,10 +744,16 @@ function setBubbleOn(v) {
   if (!bubbleOn) hideCostBubble()
 }
 // 登录态显示（数据来自开放平台会话，不再有 API key）
+// loginWatchTimer：点「去登录」后启动的轮询，登录成功即清除
+var loginWatchTimer = null
 function updateLoginState(ok) {
   loginStateEl.textContent = ok ? '已登录 ✓' : '未登录'
   loginStateEl.className = 'dshwv-login-state' + (ok ? ' dshwv-login-ok' : '')
   loginBtn.textContent = ok ? '重登' : '去登录'
+  if (ok && loginWatchTimer) {
+    clearInterval(loginWatchTimer)
+    loginWatchTimer = null
+  }
 }
 // 开机自启：勾选状态以主进程返回的实际注册结果为准
 function applyAutoStart(want) {
@@ -875,21 +924,16 @@ function closeMenu() {
   root.style.transition = ''
 }
 // 设置面板锚在鲸鱼上（不再有右上角菜单按钮）
+// 注：挂件窗口固定 560px 宽，且 .dshwv-root 是 position:fixed;right:0，
+// 因此在**窗口坐标系**里鲸鱼永远贴右 —— 原先「按所在半屏贴左/贴右」的
+// onLeft 分支不可达（左侧对齐是死代码），这里直接按贴右处理，避免误导
 function positionMenu() {
   try {
     var r = root.getBoundingClientRect()
     var vp = viewport()
-    var onLeft = r.left + r.width / 2 < vp.w / 2
-    // 菜单出现在鲸鱼上方，按所在半屏贴左/贴右对齐
-    if (onLeft) {
-      menuBox.style.left = r.left + 'px'
-      menuBox.style.right = 'auto'
-      menuBox.style.transformOrigin = 'bottom left'
-    } else {
-      menuBox.style.right = (vp.w - r.right) + 'px'
-      menuBox.style.left = 'auto'
-      menuBox.style.transformOrigin = 'bottom right'
-    }
+    menuBox.style.right = (vp.w - r.right) + 'px'
+    menuBox.style.left = 'auto'
+    menuBox.style.transformOrigin = 'bottom right'
     menuBox.style.bottom = (vp.h - r.top) + 'px'
     menuBox.style.top = 'auto'
   } catch (err) {}
@@ -1073,7 +1117,7 @@ API.getConfig()
       autostartToggle.disabled = !autoStartSupported
       autostartToggle.title = autoStartSupported
         ? '开机时自动启动小鲸鱼'
-        : ('开发态不可用：' + (d.autoStart.reason || '未打包'))
+        : (d.autoStart.reason || '当前环境不支持开机自启')
     }
     if (typeof d.peakMode === 'string') {
       peakMode = d.peakMode === 'liangwen' || d.peakMode === 'qiangqiang' ? d.peakMode : 'default'

@@ -27,9 +27,9 @@ const { app, BrowserWindow, session } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const PARTITION = 'persist:deepseek'
-const BASE = 'https://platform.deepseek.com'
-const USAGE_URL = BASE + '/usage'
+// 复用 lib/platform.js 的常量：各自硬编码一份的话，lib 里改了分区名或路径后
+// 探测脚本仍跑在旧值上，而「截获 0 条」这类结果很难被发现是分区不一致导致的
+const { PARTITION, BASE, USAGE_URL } = require('../lib/platform.js')
 const OUT = path.join(__dirname, '..', 'probe-out.json')
 
 const SHOW = process.argv.includes('--show')
@@ -140,7 +140,13 @@ async function run() {
     },
   })
 
-  attachNetworkCapture(win.webContents)
+  // 截获启用失败就直接终止：否则会继续跑完（未登录时还会在 --show 下白等 12 分钟），
+  // 最后写出一个「截获 0 条」的结果文件，容易被误读成「接口没有数据」
+  if (!attachNetworkCapture(win.webContents)) {
+    log('✘ 无法启用 CDP 截获，终止探测')
+    win.destroy()
+    return finish('capture-failed')
+  }
 
   log('加载', USAGE_URL)
   await win.loadURL(USAGE_URL)

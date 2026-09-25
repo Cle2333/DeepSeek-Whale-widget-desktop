@@ -30,35 +30,73 @@ let pkgDir
 try {
   pkgDir = path.dirname(require.resolve('electron/package.json'))
 } catch (err) {
+  log('解析 electron 包路径失败：', (err && err.message) || err)
+  // 包目录明明在却解析不到 = 真异常（软链损坏、exports 限制等），
+  // 不能当成「未安装」静默 exit(0) —— 那会把「修复失败」伪装成「无需修复」，
+  // 与文末专门强调的「必须非零退出」自相矛盾
+  if (fs.existsSync(path.join(process.cwd(), 'node_modules', 'electron', 'package.json'))) {
+    log('node_modules/electron 存在但无法解析，视为安装异常。')
+    process.exit(1)
+  }
   log('未找到 electron 包，跳过。')
   process.exit(0)
 }
 const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'))
 const version = pkg.version
 
-const platformPath =
-  process.platform === 'win32' ? 'electron.exe' : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron'
+// 平台白名单：不认识的平台不能静默回落（否则会去找 linux 包，报错也误导）
+const PLATFORMS = {
+  win32: { platName: 'win32', binPath: 'electron.exe' },
+  darwin: { platName: 'darwin', binPath: 'Electron.app/Contents/MacOS/Electron' },
+  linux: { platName: 'linux', binPath: 'electron' },
+}
+const curPlatform = PLATFORMS[process.platform]
+if (!curPlatform) {
+  log(`不支持的系统 ${process.platform}，请手动解压 electron 二进制。`)
+  process.exit(1)
+}
+const platformPath = curPlatform.binPath
 const distDir = path.join(pkgDir, 'dist')
 const exePath = path.join(distDir, platformPath)
 const pathTxt = path.join(pkgDir, 'path.txt')
 
 // --- 已就绪则跳过（幂等）---
+// 只查「文件在」不够：上次解压中断可能留下**截断的** electron.exe，
+// 而末尾的存在性校验照样通过 → 永远无法自愈。加版本文件与体积校验。
 if (fs.existsSync(exePath) && fs.existsSync(pathTxt)) {
-  log(`electron ${version} 二进制已就绪，跳过。`)
+  const size = (() => { try { return fs.statSync(exePath).size } catch (e) { return 0 } })()
+  const verOk = (() => {
+    try { return fs.readFileSync(path.join(distDir, 'version'), 'utf8').trim() === version } catch (e) { return false }
+  })()
+  const sizeOk = size > 20 * 1024 * 1024 // electron 主程序远大于 20MB
+  if (verOk && sizeOk) {
+    log(`electron ${version} 二进制已就绪，跳过。`)
+    process.exit(0)
+  }
+  log(`检测到不完整或损坏的 dist（${platformPath} ${size} 字节，版本校验=${verOk}），重新解压。`)
+}
+
+// 用户主动跳过 / 覆盖二进制时不该报错
+if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) {
+  log('ELECTRON_SKIP_BINARY_DOWNLOAD 已设置：属于主动跳过，无需修复。')
+  process.exit(0)
+}
+if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
+  log('ELECTRON_OVERRIDE_DIST_PATH 已设置：运行期不使用 node_modules/electron/dist，无需修复。')
   process.exit(0)
 }
 
 // --- 在缓存里找对应的 zip ---
 // 只支持 electron 官方发布过的架构；不认识的架构**直接失败**，
 // 不能静默按 x64 找 —— 那样会解出错误架构的二进制，而末尾的
-// existsSync 校验照样通过（文件在但跑不起来），故障被掩盖
+// 存在性校验照样通过（文件在但跑不起来），故障被掩盖
 const SUPPORTED_ARCHS = ['x64', 'arm64', 'ia32']
 if (!SUPPORTED_ARCHS.includes(process.arch)) {
   log(`不支持的架构 ${process.arch}，请手动解压 electron 二进制。`)
   process.exit(1)
 }
 const arch = process.arch
-const platName = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
+const platName = curPlatform.platName
 const zipName = `electron-v${version}-${platName}-${arch}.zip`
 
 const cacheRoots = [
@@ -92,9 +130,13 @@ if (!zipPath) {
 }
 log('使用缓存包:', zipPath, `(${(fs.statSync(zipPath).size / 1048576).toFixed(1)} MB)`)
 
-// --- 清掉 extract-zip 留下的半成品，重新解压 ---
-fs.rmSync(distDir, { recursive: true, force: true })
-fs.mkdirSync(distDir, { recursive: true })
+// --- 解压到**临时目录**，成功后才整体替换 ---
+// ★ 不能先把 dist 删掉：万一没有可用解压工具（精简 Linux 镜像常缺 unzip）
+//   或 zip 损坏（跨机拷贝缓存 / 下载中断残留），先删会让「本来只是缺
+//   path.txt、二进制尚在」的安装被彻底破坏，比不修还糟
+const tmpDir = distDir + '.tmp'
+fs.rmSync(tmpDir, { recursive: true, force: true })
+fs.mkdirSync(tmpDir, { recursive: true })
 
 // ★ 必须用**系统自带**的解压工具：
 //   - Windows：System32\tar.exe（bsdtar，能解 zip）。绝不能只写 "tar"——
@@ -109,8 +151,8 @@ function extractWith(cmd, args) {
 const attempts =
   process.platform === 'win32'
     ? [
-        [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zipPath, '-C', distDir]],
-        ['tar', ['-xf', zipPath, '-C', distDir, '--force-local']],
+        [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zipPath, '-C', tmpDir]],
+        ['tar', ['-xf', zipPath, '-C', tmpDir, '--force-local']],
         [
           'powershell',
           [
@@ -118,13 +160,13 @@ const attempts =
             '-Command',
             // 单引号在 PowerShell 里需**双写**转义：路径含 ' 时（用户目录/自定义缓存路径）
             // 会把字符串提前闭合、命令被截断
-            `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${distDir.replace(/'/g, "''")}' -Force`,
+            `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${tmpDir.replace(/'/g, "''")}' -Force`,
           ],
         ],
       ]
     : [
-        ['unzip', ['-q', '-o', zipPath, '-d', distDir]],
-        ['tar', ['-xf', zipPath, '-C', distDir]],
+        ['unzip', ['-q', '-o', zipPath, '-d', tmpDir]],
+        ['tar', ['-xf', zipPath, '-C', tmpDir]],
       ]
 
 let extracted = false
@@ -136,11 +178,20 @@ for (const [cmd, args] of attempts) {
   }
   log('解压尝试失败:', cmd)
 }
-if (!extracted) {
-  log('全部解压方式均失败，请手动解压后重试：')
-  log(`  ${zipPath}  ->  ${distDir}`)
+
+// --- 只有确认解压出可执行文件，才动原 dist ---
+const tmpExe = path.join(tmpDir, platformPath)
+const tmpOk = extracted && fs.existsSync(tmpExe) && fs.statSync(tmpExe).size > 20 * 1024 * 1024
+if (!tmpOk) {
+  log('解压失败或结果不完整（缺少可用的 ' + platformPath + '），**保留原 dist 不变**。')
+  log(`如需手动处理：把 ${zipPath}`)
+  log(`  解压到 ${distDir}`)
+  fs.rmSync(tmpDir, { recursive: true, force: true })
   process.exit(1)
 }
+fs.rmSync(distDir, { recursive: true, force: true })
+fs.renameSync(tmpDir, distDir)
+log('已替换 dist/')
 
 // --- 补齐 install.js 的其余步骤 ---
 const srcTypes = path.join(distDir, 'electron.d.ts')

@@ -13,7 +13,7 @@ const { app, BrowserWindow, ipcMain, screen, Menu } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { createWhaleCore, isPeakTime } = require('./lib/core.js')
-const { createPlatformClient, PARTITION, BASE, USAGE_URL } = require('./lib/platform.js')
+const { createPlatformClient, PARTITION, USAGE_URL, APP_DATA_DIR_NAME, lockDownWindow } = require('./lib/platform.js')
 
 const isDev = !app.isPackaged
 // portable 单文件版：PORTABLE_EXECUTABLE_DIR 指向便携 EXE 所在目录；
@@ -30,8 +30,12 @@ const platform = createPlatformClient({ headless: true })
 // 让开发态与打包版共用同一份开放平台登录态（也便于定位问题）。
 // 必须在 app ready 之前设置。
 try {
-  app.setPath('userData', path.join(app.getPath('appData'), 'DeepSeekWhaleWidget'))
-} catch (err) {}
+  app.setPath('userData', path.join(app.getPath('appData'), APP_DATA_DIR_NAME))
+} catch (err) {
+  // 不能静默：一旦失败，会话目录会悄悄回落到「随包名变化」的默认路径，
+  // 那正是本次改动要避免的后果
+  console.log('[whale] setPath(userData) 失败，将回落到默认目录:', String(err && err.message))
+}
 
 let win = null
 let dragState = null
@@ -97,36 +101,10 @@ function setAutoStart(enabled) {
 // 只允许打开固定的平台地址（不接受渲染层传入的任意 URL）。
 let detailWin = null
 
-// 是否属于平台自身站点。
-// 用 URL 解析比对 hostname（不能简单 includes —— "https://platform.deepseek.com.evil.com"
-// 这种字符串会骗过 includes 判断）。
-function isPlatformUrl(u) {
-  try {
-    const x = new URL(u)
-    const host = new URL(BASE).hostname
-    return x.protocol === 'https:' && x.hostname === host
-  } catch (err) {
-    return false
-  }
-}
-
-// 给「能看到登录态」的窗口统一加导航围栏：
-//   1. 不允许页面开新窗口（window.open / target=_blank / 弹窗）
-//   2. 不允许顶层导航到站外（点站内链接仍可正常用）
-//   3. 不允许挂 webview
-function lockDownWindow(wc, label) {
-  try {
-    wc.setWindowOpenHandler(() => ({ action: 'deny' }))
-  } catch (err) {}
-  const guard = (e, url) => {
-    if (!isPlatformUrl(url)) {
-      e.preventDefault()
-      console.log(`[${label}] 已拦截站外导航:`, String(url).slice(0, 160))
-    }
-  }
-  wc.on('will-navigate', guard)
-  wc.on('will-redirect', guard)
-  wc.on('will-attach-webview', (e) => e.preventDefault())
+// 导航围栏统一由 lib/platform.js 提供（详情窗口与平台隐藏窗口共用一份，
+// 避免安全策略双份维护出现分叉）——此处直接引用，不再本地实现
+function lockDownDetails(wc) {
+  lockDownWindow(wc, 'details')
 }
 
 function openDetails() {
@@ -157,7 +135,7 @@ function openDetails() {
     })
     // 页面自身的 <title> 会覆盖窗口标题，这里保留我们设定的标题（便于识别）
     detailWin.on('page-title-updated', (e) => e.preventDefault())
-    lockDownWindow(detailWin.webContents, 'details')
+    lockDownDetails(detailWin.webContents)
     // loadURL 失败会**异步 reject**，外层 try/catch 只能捕获同步异常，须显式处理，
     // 否则会产生未处理的 Promise rejection
     detailWin.loadURL(USAGE_URL).catch((err) => {
@@ -269,6 +247,11 @@ function createWindow() {
 
   win.on('closed', () => {
     win = null
+    // 挂件窗口是唯一的用户可见窗口，它关掉就该退出应用。
+    // ★ 不能依赖 window-all-closed —— 平台取数用的隐藏窗口一直存在，
+    //   那个事件永远不会触发，进程会以**不可见**形式残留
+    //   （skipTaskbar 让用户连入口都找不到）
+    app.quit()
   })
 
   win.loadFile(path.join(app.getAppPath(), 'renderer', 'index.html'))
@@ -374,26 +357,30 @@ function createWindow() {
           console.log('SMOKE CHECK 当前 URL: ' + urlNow)
         }
 
-        // 5) 开机自启端到端验证（只有打包版才有意义）
+        // 5) 开机自启验证
+        //   默认**只读**：冒烟测试不该真实改写用户机器的自启注册项。
+        //   需要验证写入时显式加 --smoke-autostart，且用 try/finally 保证恢复。
         console.log('SMOKE CHECK isPackaged: ' + app.isPackaged)
         console.log('SMOKE CHECK PORTABLE_EXECUTABLE_FILE: ' + (process.env.PORTABLE_EXECUTABLE_FILE || '(未设置)'))
         console.log('SMOKE CHECK process.execPath: ' + process.execPath)
         const auto0 = getAutoStart()
-        console.log('SMOKE CHECK autoStart 初始: ' + JSON.stringify(auto0))
-        if (auto0.supported) {
-          const wasOn = !!auto0.enabled
-          const on = setAutoStart(true)
-          console.log('SMOKE CHECK 开启自启: ' + JSON.stringify(on))
-          console.log('SMOKE CHECK 回读(应为 true): ' + JSON.stringify(getAutoStart()))
-          const off = setAutoStart(false)
-          console.log('SMOKE CHECK 关闭自启: ' + JSON.stringify(off))
-          console.log('SMOKE CHECK 回读(应为 false): ' + JSON.stringify(getAutoStart()))
-          // ★ 冒烟测试不得改动用户真实的自启状态：
-          //   若测试前用户是开着的，这里必须恢复，否则「跑个测试把自启关了」
-          if (wasOn) setAutoStart(true)
-          console.log('SMOKE CHECK 已恢复初始状态: ' + JSON.stringify(getAutoStart()))
+        console.log('SMOKE CHECK autoStart: ' + JSON.stringify(auto0))
+        if (!auto0.supported) {
+          console.log('SMOKE CHECK 自启不可用: ' + (auto0.reason || ''))
+        } else if (!process.argv.includes('--smoke-autostart')) {
+          console.log('SMOKE CHECK 自启：只读校验通过（如需验证写入，加 --smoke-autostart）')
         } else {
-          console.log('SMOKE CHECK 自启不可用（开发态）: ' + (auto0.reason || ''))
+          const wasOn = !!auto0.enabled
+          try {
+            console.log('SMOKE CHECK 开启自启: ' + JSON.stringify(setAutoStart(true)))
+            console.log('SMOKE CHECK 回读(应为 true): ' + JSON.stringify(getAutoStart()))
+            console.log('SMOKE CHECK 关闭自启: ' + JSON.stringify(setAutoStart(false)))
+            console.log('SMOKE CHECK 回读(应为 false): ' + JSON.stringify(getAutoStart()))
+          } finally {
+            // 即使中途抛错/被强杀，也尽量把用户原状态写回去
+            setAutoStart(wasOn)
+            console.log('SMOKE CHECK 已恢复初始状态: ' + JSON.stringify(getAutoStart()))
+          }
         }
       } catch (err) {
         console.log('SMOKE RENDERER ERROR: ' + err.message)
@@ -529,6 +516,10 @@ ipcMain.handle('whale:dragEnd', () => {
 // ---------------------------------------------------------------------------
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
+  // 明确日志：单实例锁按 userData 目录取作用域，开发态与打包版现在共用同一目录。
+  // 没有这行的话「被另一实例挡下」会表现为**无输出 + 退出码 0**，
+  // 与「冒烟全部通过」完全无法区分
+  console.log('[whale] 已有实例在运行（单实例锁被占用），本次启动退出')
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -545,10 +536,16 @@ if (!gotLock) {
     })
   })
 
-  app.on('window-all-closed', () => {
+  // ★ 清理挂在 before-quit：这是 app.quit() 一定会走到的生命周期。
+  //   不要放在 window-all-closed —— 平台客户端的隐藏窗口常驻，
+  //   那个事件可能**永不触发**（改动前正是靠它退出，属行为回归）。
+  app.on('before-quit', () => {
     try {
       platform.destroy()
     } catch (err) {}
+  })
+
+  app.on('window-all-closed', () => {
     app.quit()
   })
 }

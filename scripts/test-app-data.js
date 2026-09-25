@@ -5,10 +5,10 @@
 const { app } = require('electron')
 const path = require('node:path')
 
-// ★ 与 main.js 保持一致：钉死会话目录
-app.setPath('userData', path.join(app.getPath('appData'), 'DeepSeekWhaleWidget'))
+const { createPlatformClient, APP_DATA_DIR_NAME } = require('../lib/platform.js')
+// ★ 与 main.js 保持一致：钉死会话目录（共用同一个常量，避免漏改后两处不一致）
+app.setPath('userData', path.join(app.getPath('appData'), APP_DATA_DIR_NAME))
 
-const { createPlatformClient } = require('../lib/platform.js')
 // 峰谷要在这里自己算：getSnapshot() **不返回** isPeak —— 那是 main.js 的 fetchData
 // 拿到 payload 后另外附加的字段（早期版本这里读 snap.isPeak 恒为 undefined，
 // 于是诊断输出永远打印「谷时」，是个误导性的死分支）
@@ -18,45 +18,61 @@ const SHOW = process.argv.includes('--show')
 
 app.whenReady().then(async () => {
   const pc = createPlatformClient({ headless: !SHOW })
-  const t0 = Date.now()
-  let snap = await pc.getSnapshot()
+  // ★ try/finally：中途任何 reject 都要保证销毁窗口并退出，
+  //   否则隐藏窗口会让进程一直挂着且没有任何输出
+  try {
+    const t0 = Date.now()
+    let snap = await pc.getSnapshot()
 
-  if (!snap.ok && SHOW && (snap.code === 'NEED_LOGIN' || snap.code === 'NO_CREDENTIAL')) {
-    console.log('\n⚠ 未登录 —— 已弹出登录窗口，请在其中完成登录（最多 10 分钟）…')
-    await pc.openLogin()
-    const deadline = Date.now() + 10 * 60 * 1000
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 4000))
-      const st = await pc.pageState()
-      if (st && st.ready) {
-        console.log('✔ 检测到登录，重新取数…')
-        break
+    if (!snap.ok && SHOW && (snap.code === 'NEED_LOGIN' || snap.code === 'NO_CREDENTIAL')) {
+      console.log('\n⚠ 未登录 —— 已弹出登录窗口，请在其中完成登录（最多 10 分钟）…')
+      const lr = await pc.openLogin()
+      if (lr && lr.ok === false) {
+        console.log('✘ 打开登录窗口失败:', lr.error)
+        return
       }
+      const deadline = Date.now() + 10 * 60 * 1000
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 4000))
+        const st = await pc.pageState()
+        if (st && st.ready) {
+          console.log('✔ 检测到登录，重新取数…')
+          break
+        }
+      }
+      snap = await pc.getSnapshot()
     }
-    snap = await pc.getSnapshot()
-  }
 
-  console.log('\n===== 应用真实数据链路 =====')
-  console.log('userData  :', app.getPath('userData'))
-  console.log('耗时(ms)  :', Date.now() - t0)
-  console.log('ok        :', snap.ok)
-  if (!snap.ok) {
-    console.log('code      :', snap.code)
-    console.log('error     :', snap.error)
-  } else {
-    console.log('币种      :', snap.currency)
-    console.log('余额      :', snap.balance)
-    console.log('赠送余额  :', snap.bonusBalance)
-    console.log('今日消费  :', snap.todayCost)
-    console.log('峰谷      :', isPeakTime(Math.floor(Date.now() / 1000)) ? '高峰' : '谷时')
-    console.log('今日明细  :', JSON.stringify(snap.todayByKey || {}))
+    console.log('\n===== 应用真实数据链路 =====')
+    console.log('userData  :', app.getPath('userData'))
+    console.log('耗时(ms)  :', Date.now() - t0)
+    console.log('ok        :', snap.ok)
+    if (!snap.ok) {
+      console.log('code      :', snap.code)
+      console.log('error     :', snap.error)
+    } else {
+      console.log('币种      :', snap.currency)
+      console.log('余额      :', snap.balance)
+      console.log('赠送余额  :', snap.bonusBalance)
+      // 今日消费失败时 todayError/todayCode 才是线索，别只打印 null
+      // （那容易被误读成「今天没消费」）
+      console.log(
+        '今日消费  :',
+        snap.todayCost,
+        snap.todayError ? '(失败: ' + snap.todayCode + ' ' + snap.todayError + ')' : ''
+      )
+      console.log('峰谷      :', isPeakTime(Math.floor(Date.now() / 1000)) ? '高峰' : '谷时')
+      console.log('今日明细  :', JSON.stringify(snap.todayByKey || {}))
+    }
+    const st = await pc.pageState()
+    console.log('页面状态  :', JSON.stringify(st))
+    console.log('============================\n')
+  } catch (err) {
+    console.log('✘ 脚本异常:', (err && err.stack) || err)
+  } finally {
+    pc.destroy()
+    app.quit()
   }
-  const st = await pc.pageState()
-  console.log('页面状态  :', JSON.stringify(st))
-  console.log('============================\n')
-
-  pc.destroy()
-  app.quit()
 })
 
 app.on('window-all-closed', () => app.quit())
