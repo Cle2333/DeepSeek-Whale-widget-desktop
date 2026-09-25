@@ -2,149 +2,208 @@
 
 ![DeepSeek 余额小鲸鱼](assets/DSH2.png)
 
-DeepSeek 余额小鲸鱼 —— **脱离 DSH 的独立桌面挂件**：小鲸鱼气泡图常驻桌面右下角，实时显示 DeepSeek API 余额、今日已用、峰谷定价换算，支持拖拽/边缘吸附/按压音效/随机台词。打包为**单文件 EXE**，用户数据（含加密的 API_KEY）存于 **EXE 同目录 `userdata.json`**。
+DeepSeek 余额小鲸鱼 —— **脱离 DSH 的独立桌面挂件**：小鲸鱼气泡图常驻桌面，实时显示 DeepSeek 开放平台**余额**与**今日已用消费**，支持拖拽/边缘吸附/按压音效/随机台词。打包为**单文件 EXE**。
 
-> **来源**：本仓库由 GitHub 仓库 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 的 DSH 插件版改造而来——在原插件的基础上新增了脱离 DSH 的**桌面版**。本项目沿用 **MIT License**，版权归原作者所有（见 [LICENSE](LICENSE)）：
+> ## 本仓库与原版的差异
+>
+> 本仓库 fork 自 [comreade-123/DeepSeek-Whale-widget-desktop](https://github.com/comreade-123/DeepSeek-Whale-widget-desktop)（该仓库又是 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 的 DSH 插件版改造而来）。MIT License，**版权归原作者所有**（见 [LICENSE](LICENSE)）：
 >
 > ```
 > Copyright (c) 2026 MeteorNOX
 > Copyright (c) 2026 EthanMaven
 > ```
-
-> 桌面版不支持「每轮对话消耗统计」（该功能依赖 DSH 会话事件，桌面环境无数据源）。
+>
+> ### 改了什么
+>
+> | 方面 | 原版 | 本 Fork |
+> |---|---|---|
+> | **凭据** | 必须填 `API_KEY`（AES 加密存 `userdata.json`） | **不需要任何 key**：登录一次开放平台，复用该会话 |
+> | **今日已用** | 靠运行时观测余额差值记账，**漏掉程序未运行期间的消费** | 读平台侧真实账单，**含程序启动前的消费** |
+> | **设置入口** | 悬停鲸鱼右上角的**三横线按钮** | 按钮已移除，改为**右键鲸鱼 → 设置…** |
+> | **查看详情** | 无此功能 | **右键菜单 → 查看用量详情**，弹出应用内置窗口（非系统浏览器） |
+> | **开机自启** | 无（需手动放 `shell:startup`） | 设置面板内开关，写 `HKCU\...\Run` |
+> | **外链安全** | — | 持有登录态的窗口全部加导航围栏：禁开新窗口、禁跳站外 |
+> | **数据文件** | 含加密的 `secrets` | **不再保存任何凭据** |
+> | **依赖管理** | npm | pnpm |
 
 ## 特性
 
-- 🐋 **独立桌面应用**：Electron 透明置顶窗口，不依赖 DSH / 浏览器；开机即用
-- 💰 **余额**：60 秒自动刷新 + 点击鲸鱼手动刷新；余额变化数字**滚动动画**；网络抖动自动沿用最近余额不报错
-- 📊 **今日已用**：两种模式任选
-  - **小鲸鱼记账（推荐，免令牌）**：鲸鱼娘每次观测余额后用余额差值自动记账（存 `userdata.json`，跨天自动归零归档）
-  - **实时·令牌**：填入平台会话令牌后直接调用平台用量接口，按**峰谷定价**（空闲 9:00–12:00 与 14:00–18:00 之外 / 高峰 9–12 与 14–18 点）实时换算今日已用
-- 🎚️ **汉堡菜单内置 API_KEY / 平台令牌**（悬停鲸鱼右上角三点打开）：
-  - `API_KEY`（必填）：拉取余额；**AES-256-GCM 加密后写入 `userdata.json`**，明文永不落盘、渲染层拿不到
-  - `平台令牌`（可选）：实时用量模式用，同样加密存储
-  - 大小滑块（0.6–2.5 倍）、音效切换（小黄鸭 / 音效1）、音量调节、用量模式、峰谷提示文案（默认 / 梁文峰谷 / !?强强?!）、气泡开关
+- 🐋 **独立桌面应用**：Electron 透明置顶窗口，不依赖 DSH / 浏览器
+- 🔑 **零 API key**：登录一次 DeepSeek 开放平台即可（会话持久化，重启免登录）
+- 💰 **余额**：60 秒自动刷新 + 点击鲸鱼手动刷新；余额变化数字**滚动动画**；网络抖动自动沿用最近值不报错
+- 📊 **今日已用**：直接读**开放平台真实账单**（按小时/天分桶），
+  **包含程序启动前产生的消费**——这是原版记账模式读不到的部分
 - 🖱️ **拖拽 + 四分之一屏边缘吸附**（左/右/上/下，角落可组合），窗口位置记忆
 - 🔄 左吸附时整体**水平镜像翻转**（文字同步反向、带动画）
-- 🧸 **按压 Q 弹**玩偶效果（按压时底部坐标不变）+ 按压/松手音效（内置 mp3，缺失时静默降级）
-- 💬 **随机台词**：点击气泡切换随机台词段（加权随机，含峰谷提示/今日已用/gif 动图/卖萌吐槽），再点一次关闭；气泡总显示 5 秒自动收起
-- 🚪 菜单底部「退出小鲸鱼」按钮（无边框窗口没有系统关闭按钮）
+- 🧸 **按压 Q 弹**玩偶效果 + 按压/松手音效（内置 mp3，缺失时静默降级）
+- 💬 **随机台词**：点击气泡切换台词段，再点一次关闭；气泡总显示 5 秒自动收起
+- 🖲️ **右键菜单**：查看用量详情（内置窗口）/ 设置… / 重新登录开放平台 / 退出
+- ⚙️ **设置面板**：大小（0.6–2.5 倍）、音效、音量、峰谷文案、气泡开关、开放平台登录态、**开机自启**
+- 🔒 **导航围栏**：能看到登录态的窗口禁止开新窗口、禁止跳转站外网页
 
-## 快速开始（使用打包好的 EXE）
+## 快速开始
 
-1. 下载 Release 里的 `DeepSeekWhaleWidget_<version>_windows_x86.exe`（或按下方「构建」自行打包），放到任意目录双击运行
-2. 桌面右下角出现小鲸鱼 → 鼠标悬停鲸鱼右上角出现**三点菜单** → 在 **API_KEY** 行粘贴你的 DeepSeek API Key（`sk-` 开头），点「保存」
-3. 余额 60 秒内自动显示；点击鲸鱼可立即刷新并弹气泡
-4. 首次运行后，EXE 同目录自动生成 `userdata.json`（设置 + 加密的密钥 + 记账数据）
+1. 获取 `DeepSeekWhaleWidget_<version>_win_x86.exe`（Release，或按下方「构建」自行打包），放到任意可写目录双击运行
+2. 桌面出现小鲸鱼。**右键鲸鱼 → 设置… → 开放平台 → 去登录**，在弹出的窗口里登录开放平台
+3. 余额与今日已用会自动显示；点击鲸鱼可立即刷新并弹气泡
+4. 首次运行后 EXE 同目录自动生成 `userdata.json`（**只存界面设置与窗口位置，不含任何凭据**）
 
-> 托盘/开机自启：当前版本未做系统托盘，最小化为「直接退出」；如需开机自启，把 EXE 快捷方式放入 `shell:startup` 即可。
+> 登录态保存在 `%APPDATA%\DeepSeekWhaleWidget\Partitions\deepseek`，**一次登录长期有效**。
+
+## 使用说明
+
+### 右键菜单（右键鲸鱼本体）
+
+| 项 | 说明 |
+|---|---|
+| 查看用量详情 | 打开应用内置窗口显示开放平台用量页（已登录，无需再登） |
+| 设置… | 打开设置面板 |
+| 重新登录开放平台 | 打开登录窗口（换账号或登录态失效时用） |
+| 退出小鲸鱼 | 退出应用（无边框窗口没有系统关闭按钮） |
+
+### 设置面板
+
+| 行 | 说明 |
+|---|---|
+| 大小 | 0.6–2.5 倍滑块 + 数字框（1–20） |
+| 音效 / 音量 | 小黄鸭（Ya1/Ya2）/ 音效1（D1/D2） |
+| 峰谷 | 提示文案风格：默认 / 梁文峰谷 / !?强强?! |
+| 气泡 | 开关思考气泡 |
+| 开放平台 | 显示登录态（未登录 / 已登录 ✓）+ 「去登录 / 重登」按钮 |
+| 开机自启 | 开关；**仅打包版可用**（开发态禁用并提示原因） |
+
+### 今日已用的口径
+
+数据来自平台接口 `GET /api/v0/usage/by_api_key/cost`，传当日区间（本地零点 → +24h）。
+
+⚠️ **注意分桶粒度会随查询区间变化**：查 1 天返回 **3600 秒（按小时）** 桶，查 2 天及以上返回 **86400 秒（按天）** 桶。因此实现里是**累加区间内全部桶**，而不是只取「今日零点」那一个（后者只会统计到当天第一个小时）。
+
+不加 `api_key_tracking_id` 时接口返回账号下**所有 key 的汇总**，正是「今日总消费」。
 
 ## 构建 EXE（从源码）
 
-环境要求：Windows 10/11 x64、Node.js ≥ 18（开发机）。
+环境要求：Windows 10/11 x64、Node.js ≥ 18、pnpm。
 
 ```powershell
-# 安装依赖（electron 31.7.7 + electron-builder）
-npm install
+pnpm install
 
-# 国内网络请先设置 electron-builder 二进制镜像（NSIS 等工具链默认从 GitHub 下载）
+# 国内网络建议设置镜像（electron 二进制与 electron-builder 工具链）
+$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
 $env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-builder-binaries/"
 
-# 打包单文件便携 EXE（输出到 dist/）
-npm run dist
+pnpm run dist
 ```
 
-产物：`dist/DeepSeekWhaleWidget_<version>_windows_x86.exe`（当前版本 1.0.1）。
-
-构建说明：
-
-- `npm run dist` = `node scripts/prepare-electron.mjs` + `electron-builder --win portable`
-- **无需管理员权限**：electron-builder 的 winCodeSign 工具链解压需要符号链接权限（非管理员 Windows 会报 `Cannot create symbolic link`），因此配置了 `win.signAndEditExecutable: false`，改由 `prepare-electron.mjs` 在打包前用 rcedit 给 `build/electron-dist/electron.exe` 打好图标与版本信息（`electronDist` 指向该目录），产物 EXE 与运行时的任务栏图标均正确
-- 首次运行 `npm run dist` 会把 `node_modules/electron/dist` 复制到 `build/electron-dist/`（约 300MB，已 gitignore），之后可离线复用
-- 若提示 `winCodeSign` 解压失败：说明未开启 Windows「开发者模式」，属正常现象——上面的流程已绕开该工具链；也可开启开发者模式后把 `signAndEditExecutable` 改回默认值让 electron-builder 自行处理
+产物：`dist/DeepSeekWhaleWidget_<version>_win_x86.exe`
 
 其他命令：
 
 ```powershell
-npm start          # 开发模式直接运行（数据同样写到项目目录 userdata.json）
-npm run dist:dir   # 仅生成免安装目录（dist/win-unpacked/），不做单文件打包
-npx electron . --smoke   # 冒烟测试：启动 5 秒自动退出并打印渲染层状态
+pnpm start                # 开发模式运行
+pnpm run smoke            # 冒烟测试：启动后自检并退出（含数据/菜单/详情窗口/自启）
+pnpm run data             # 只验证数据链路（打印余额与今日消费）
+pnpm run fix-electron     # 修复 electron 二进制解压（见下）
 ```
+
+### 构建说明
+
+- `pnpm run dist` = `node scripts/prepare-electron.mjs` + `electron-builder --win portable`
+- **无需管理员权限**：配置了 `win.signAndEditExecutable: false`，改由 `prepare-electron.mjs`
+  用 rcedit 给 `build/electron-dist/electron.exe` 打图标与版本信息（规避 winCodeSign 的符号链接权限要求）
+- `build/electron-dist/`（约 300MB）与 `dist/win-unpacked/` 是中间产物，可随时删除
+
+### electron 二进制解压（Node 26 环境必读）
+
+在 Node 26 下，electron 自带的 postinstall 会**静默失败**：`@electron/get` 正常下载/命中缓存，
+但随后 `extract-zip` 的 promise 永不 settle，Node 事件循环空转后直接退出（exit 0），
+留下一个只含 `locales/` 的空 `dist/`（外加缺失的 `path.txt`），症状是：
+
+```
+Error: Electron failed to install correctly, please delete node_modules/electron and try installing again
+```
+
+本仓库用 `scripts/fix-electron-dist.mjs` 解决：跳过 `extract-zip`，改用系统解压工具
+（Windows 用 `System32\tar.exe`，macOS/Linux 用 unzip/tar），并补齐 `path.txt`。
+该脚本是**幂等**的，已挂到 `postinstall`，所以正常 `pnpm install` 后无需手动处理。
+
+> ⚠️ 注意：Windows 上**必须用 `System32\tar.exe` 的完整路径**。若只写 `tar`，
+> 在 git-bash 环境下会命中 GNU tar，它会把 `C:\...` 当成远程主机，报
+> `Cannot connect to C: resolve failed`。
 
 ## 数据存储与安全
 
-- 数据文件：**`userdata.json` 与 EXE 同目录**（便携版即 EXE 所在目录；开发模式为项目目录；若目录只读则回退到用户主目录）
-- 结构：`settings`（大小/音量/模式等，明文）、`pos`（吸附状态）、`secrets`（**加密**的 `apiKey` / `platformToken`）、`usage`（记账账本 + 30 天历史）、`winPos`（窗口位置）
-- 加密方案：AES-256-GCM；密钥由「内置 pepper + 本机标识（hostname|user|MAC）」经 PBKDF2-SHA256（10 万次迭代）派生
-- 说明：这是**防明文直读**级别的保护（`userdata.json` 里看不到密钥原文），并非军规级保险柜——拿到 EXE 与本机访问权限的攻击者仍可逆向。密钥明文只出现在主进程内存中，渲染层通过 IPC 只能写入、不能读取
-- 迁移：把 EXE 与 `userdata.json` 一起复制即可整体迁移（注意加密绑定本机标识，换机器后需重新填写 API_KEY）
+| 项 | 说明 |
+|---|---|
+| 设置文件 | `userdata.json` 与 EXE 同目录（目录只读时回退到用户主目录） |
+| 内容 | **只有** `settings`（界面设置）、`pos`（吸附状态）、`winPos`（窗口位置） |
+| 凭据 | **不落盘**。登录态由 Electron 会话分区保管（`%APPDATA%\DeepSeekWhaleWidget\Partitions\deepseek`） |
+| 取数方式 | 在平台页面上下文内发请求；`Authorization` 由页面注入，**token 不进 Node 进程、不写文件** |
+| 外链防护 | 持有登录态的窗口：`setWindowOpenHandler` 一律 deny；`will-navigate`/`will-redirect` 只放行 `https` + 平台同源；拒绝 `webview` |
+| 开机自启 | 写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（**用户级，无需管理员**）；默认关闭；关闭时显式清除 |
+
+> 从旧版本升级时，`lib/core.js` 会在加载时**主动删除**遗留的 `secrets`（旧 API key / 平台令牌）与
+> `usage` 记账数据 —— 新版本不再需要它们，留着只是把凭据白放在磁盘上。
+
+### 为什么开机自启的路径不能随便取
+
+portable 单文件 EXE 是**自解压**的：运行时把内容解到临时目录再执行，所以
+`process.execPath` 指向的是**临时目录**（每次启动都不同、退出即删）。用它注册自启，
+下次开机必然指向一个不存在的路径。
+
+正确做法是用 electron-builder 注入的 `PORTABLE_EXECUTABLE_FILE`（真 EXE 全路径）。
+实测对照：
+
+```
+PORTABLE_EXECUTABLE_FILE = C:\...\dist\DeepSeekWhaleWidget_2.0.0_win_x86.exe   ← 用它
+process.execPath         = C:\Users\...\AppData\Local\Temp\3Jo97...\...exe     ← 临时目录
+```
 
 ## 目录结构
 
 ```text
-DeepSeek-Whale-widget-desktop/
-├── LICENSE                 # MIT（含两位作者版权行）
-├── README.md               # 本文件
-├── whale-widget-prompt.md  # 完整规格 / 维护提示词（含桌面版附录）
-├── assets/DSH2.png         # README 顶部展示图
-├── package.json            # Electron + electron-builder 配置
-├── main.js                 # 主进程：窗口 / IPC / 拖拽吸附 / 生命周期
-├── preload.js              # contextBridge：window.whaleAPI
-├── lib/core.js             # 核心逻辑：userdata.json + 加密 + 余额/账本（纯 Node 可单测）
+├── LICENSE                        # MIT（含两位原作者版权行）
+├── README.md
+├── whale-widget-prompt.md         # 原版完整规格提示词（保留作参考）
+├── assets/DSH2.png                # README 展示图
+├── package.json                   # Electron + electron-builder 配置
+├── pnpm-workspace.yaml            # pnpm 构建脚本放行白名单
+├── main.js                        # 主进程：窗口 / IPC / 右键菜单 / 详情窗口 / 开机自启 / 导航围栏
+├── preload.js                     # contextBridge：window.whaleAPI（通道白名单）
+├── lib/
+│   ├── core.js                    # 设置存储（纯 Node，无 Electron 依赖）
+│   └── platform.js                # 开放平台会话数据层（取余额 / 今日消费）
 ├── renderer/
-│   ├── index.html          # 挂件页面
-│   ├── widget.js           # 页面挂件逻辑
-│   └── assets/             # 鲸鱼图 / gif / 音效
-├── scripts/prepare-electron.mjs  # 打包前给 electron 打图标/版本补丁
+│   ├── index.html
+│   ├── widget.js                  # 挂件页面逻辑（气泡 / 拖拽 / 右键菜单 / 设置面板）
+│   └── assets/                    # 鲸鱼图 / gif / 音效
+├── scripts/
+│   ├── prepare-electron.mjs       # 打包前给 electron 打图标/版本补丁
+│   ├── fix-electron-dist.mjs      # 修复 Node 26 下 electron 二进制解压失败
+│   ├── probe-platform.js          # 平台接口探测工具
+│   └── test-app-data.js           # 数据链路验证
 └── build/
-    ├── icon.ico            # 应用图标
-    └── tools/rcedit-x64.exe      # 第三方工具（MIT，来源 electron-builder-binaries）
+    ├── icon.ico
+    └── tools/rcedit-x64.exe       # 第三方工具（来源 electron-builder 官方 binaries 包）
 ```
-
-## 使用说明
-
-### 汉堡菜单（悬停鲸鱼右上角三点）
-
-| 行 | 说明 |
-|---|---|
-| **API_KEY** | 必填。粘贴 `sk-` 开头的 DeepSeek API Key 后点「保存」；输入框仅显示占位状态（未配置 / 已配置），不会回显密钥 |
-| **平台令牌** | 可选。实时·令牌模式用（获取方法见下）；同样加密存储 |
-| 大小 | 0.6–2.5 倍滑块 + 数字框（1–20） |
-| 音效 / 音量 | 小黄鸭（Ya1/Ya2）/ 音效1（D1/D2） |
-| 用量 | 小鲸鱼记账（默认）/ 实时·令牌 |
-| 峰谷 | 提示文案风格：默认 / 梁文峰谷 / !?强强?! |
-| 气泡 | 开关思考气泡 |
-| 退出小鲸鱼 | 退出应用 |
-
-### 两种用量模式
-
-**① 小鲸鱼记账（推荐，默认）**——只需 API_KEY。鲸鱼娘用余额差值记账，跨天自动归零归档（保留 30 天）。依赖「观测到的余额下降」累计，若应用关闭期间有消耗会漏记。
-
-**② 实时·令牌**——额外需要平台会话令牌：
-1. 浏览器登录 **https://platform.deepseek.com** → 按 **F12** → **Network** 标签
-2. 在平台页面点「用量」/刷新，找到 `usage/by_api_key/amount` 请求
-3. 复制其 **Request Headers → Authorization** 的值（形如 `Bearer eyJ...`，含 `Bearer` 前缀即可）
-4. 粘贴到菜单「平台令牌」行保存，用量模式切到「实时·令牌」
-
-> 该令牌是平台网页会话令牌（非 `sk-` API key），重新登录平台后可能需要重新获取。接口不返回金额，挂件按内置峰谷定价表换算；定价表在 `lib/core.js` 顶部 `PEAK_HOURS` / `BASE_PRICE` / `PRICING` 常量，DeepSeek 调价时可自行修改。
 
 ## 常见问题
 
-- **余额显示「未配置 API_KEY」**：打开三点菜单，在 API_KEY 行填写并保存。
-- **今日已用显示 --**：记账模式需要先有一次余额观测（60 秒内自动完成）；令牌模式需配置平台令牌。
-- **窗口拖不动**：按住鲸鱼本体（蓝色鲸鱼像素内）拖动；透明区域是穿透的，点击会落到下层窗口。
-- **点不到鲸鱼**：首次启动鼠标穿透已开启，鼠标移入鲸鱼区域即恢复交互。
-- **如何退出**：悬停鲸鱼 → 三点菜单 → 底部「退出小鲸鱼」。
-- **没有声音**：确认 `renderer/assets/*.mp3` 在包内；缺失时静默降级为无声音。
-- **userdata.json 写不进去**：EXE 所在目录只读时自动回退到用户主目录（`~/.dsh-whale-widget-userdata.json`），建议把 EXE 放到可写目录。
-- **打包后杀软报毒**：Electron 应用常见误报（未签名）；可自行用 `signtool` 签名后分发。
-- **自定义图片**：替换 `renderer/assets/DSniang1.png`（需透明背景 cut-out）；气泡由代码绘制。
+- **余额显示「需登录开放平台」**：右键鲸鱼 → 设置… → 开放平台 → 去登录。
+- **今日已用显示 --**：平台接口临时失败时会降级显示；下一次刷新（60 秒）会自动重试。
+- **窗口拖不动**：按住鲸鱼本体（蓝色像素内）拖动；透明区域是穿透的。
+- **点不到鲸鱼**：鼠标穿透默认开启，移入鲸鱼区域即恢复交互。
+- **没有声音**：确认 `renderer/assets/*.mp3` 在包内；缺失时静默降级。
+- **改不了开机自启**：开关仅在打包版可用；开发态（`electron .`）会禁用并提示原因。
+- **打包后杀软报毒**：Electron 未签名应用的常见误报；可自行 `signtool` 签名。
+- **想换鲸鱼图**：替换 `renderer/assets/DSniang1.png`（需透明背景 cut-out）；气泡由代码绘制。
 
-## 开发与维护
+## 已知限制
 
-- 完整规格、视觉参数、架构结论见 `whale-widget-prompt.md`（文末含桌面版附录）。
-- **核心逻辑单测**：`lib/core.js` 无 Electron 依赖，可 `node -e "require('./lib/core.js')"` 直接验证加密/账本逻辑。
-- **冒烟测试**：`npx electron . --smoke`（5 秒自动退出，打印渲染层初始化状态）。
+- **依赖非官方接口**：`/api/v0/users/get_user_summary`、`/api/v0/usage/by_api_key/cost` 未公开承诺兼容性，
+  平台前端改版可能导致失效。失效时挂件会提示，不会崩溃。
+- 接口失败时不做激进重试：请求串行 + 最小间隔 400 ms + 30 秒数据缓存，页面轮询 60 秒。
+- 未做系统托盘；「最小化」即退出。
+- 若平台将来改用第三方登录（Google/Apple），导航围栏会挡住跳转，需按需放宽。
 
 ## 许可证
 
