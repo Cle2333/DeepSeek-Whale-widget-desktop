@@ -1,7 +1,7 @@
 {
   "name": "deepseek-whale-widget-desktop",
-  "version": "1.0.1",
-  "description": "DeepSeek 余额小鲸鱼桌面版",
+  "version": "2.0.0",
+  "description": "DeepSeek 余额小鲸鱼桌面版（免 API key，读开放平台会话数据）",
   "main": "main.js",
   "private": true,
   "author": "MeteorNOX",
@@ -11,6 +11,10 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "smoke": "electron . --smoke --smoke-wait=18000",
+    "postinstall": "node scripts/fix-electron-dist.mjs",
+    "fix-electron": "node scripts/fix-electron-dist.mjs",
+    "data": "electron scripts/test-app-data.js",
     "dist": "node scripts/prepare-electron.mjs && electron-builder --win portable",
     "dist:win": "node scripts/prepare-electron.mjs && electron-builder --win",
     "dist:mac": "node scripts/prepare-electron.mjs && electron-builder --mac",

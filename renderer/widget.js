@@ -48,10 +48,6 @@ var css = [
   '.dshwv-period{font-size:calc(var(--dshw-u) * 104);font-weight:800;line-height:1.05}',
   '.dshwv-wrap{white-space:normal;max-width:calc(var(--dshw-u) * 560);line-height:1.2}',
   '.dshwv-hint{font-size:calc(var(--dshw-u) * 56);color:#9fb0d9;letter-spacing:.02em;margin-top:calc(var(--dshw-u) * 9);min-height:calc(var(--dshw-u) * 64);line-height:1.15}',
-  '.dshwv-menu-btn{position:absolute;top:calc(40.55% + 4px);right:4px;width:26px;height:26px;border:none;border-radius:6px;background:rgba(32,49,112,.85);cursor:pointer;pointer-events:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:0;z-index:2;opacity:0;transition:opacity .15s ease}',
-  '.dshwv-menu-btn.dshwv-menu-btn-visible{opacity:1}',
-  '.dshwv-menu-btn span{display:block;width:14px;height:2px;background:#fff;border-radius:1px}',
-  '.dshwv-menu-btn:hover{background:#203170}',
   '.dshwv-menu{position:fixed;min-width:196px;background:rgba(255,255,255,.92);border:1px solid rgba(32,49,112,.35);border-radius:10px;padding:10px 12px;opacity:0;transform:scale(.92) translateY(-4px);transform-origin:top right;transition:opacity .18s ease,transform .2s cubic-bezier(.34,1.56,.64,1);pointer-events:none;z-index:10000;box-shadow:0 6px 18px rgba(0,0,0,.18);color-scheme:light}',
   '.dshwv-menu.dshwv-menu-open{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}',
   '.dshwv-menu-row{display:flex;align-items:center;gap:8px;margin:5px 0;color:#203170;font-size:12px;white-space:nowrap}',
@@ -84,13 +80,6 @@ img.className = 'dshwv-img'
 img.src = IMG_URL
 img.alt = 'DeepSeek 余额'
 img.draggable = false
-
-var menuBtn = document.createElement('button')
-menuBtn.type = 'button'
-menuBtn.className = 'dshwv-menu-btn'
-menuBtn.title = '菜单'
-menuBtn.innerHTML = '<span></span><span></span><span></span>'
-menuBtn.addEventListener('click', function (e) { e.stopPropagation(); toggleMenu() })
 
 var menuBox = document.createElement('div')
 menuBox.className = 'dshwv-menu'
@@ -289,7 +278,6 @@ body.className = 'dshwv-body'
 body.appendChild(img)
 body.appendChild(bubbleBox)
 root.appendChild(body)
-root.appendChild(menuBtn)
 document.body.appendChild(root)
 document.body.appendChild(menuBox)
 
@@ -882,32 +870,29 @@ function toggleMenu() {
   menuOpen = !menuOpen
   if (menuOpen) positionMenu()
   menuBox.classList.toggle('dshwv-menu-open', menuOpen)
-  if (menuOpen) menuBtn.classList.add('dshwv-menu-btn-visible')
 }
 function closeMenu() {
   menuOpen = false
   menuBox.classList.remove('dshwv-menu-open')
   root.style.transition = ''
 }
+// 设置面板锚在鲸鱼上（不再有右上角菜单按钮）
 function positionMenu() {
   try {
     var r = root.getBoundingClientRect()
-    var b = menuBtn.getBoundingClientRect()
     var vp = viewport()
     var onLeft = r.left + r.width / 2 < vp.w / 2
-    // the menu appears ABOVE the button, anchored to its side:
-    // right side → menu bottom-right aligns with the button's top-right;
-    // left side → menu bottom-left aligns with the button's top-left
+    // 菜单出现在鲸鱼上方，按所在半屏贴左/贴右对齐
     if (onLeft) {
-      menuBox.style.left = b.left + 'px'
+      menuBox.style.left = r.left + 'px'
       menuBox.style.right = 'auto'
       menuBox.style.transformOrigin = 'bottom left'
     } else {
-      menuBox.style.right = (vp.w - b.right) + 'px'
+      menuBox.style.right = (vp.w - r.right) + 'px'
       menuBox.style.left = 'auto'
       menuBox.style.transformOrigin = 'bottom right'
     }
-    menuBox.style.bottom = (vp.h - b.top) + 'px'
+    menuBox.style.bottom = (vp.h - r.top) + 'px'
     menuBox.style.top = 'auto'
   } catch (err) {}
 }
@@ -949,7 +934,7 @@ function isWhaleHit(e) {
 }
 function onDocPointerDown(e) {
   if (e.target && e.target.closest) {
-    if (e.target.closest('.dshwv-bubble') || e.target.closest('.dshwv-menu') || e.target.closest('.dshwv-menu-btn')) return
+    if (e.target.closest('.dshwv-bubble') || e.target.closest('.dshwv-menu')) return
   }
   if (menuOpen) {
     closeMenu()
@@ -1020,10 +1005,9 @@ function onDocPointerMoveCursor(e) {
   if (drag && drag.active) { setWidgetCursor('grabbing'); return }
   var el = null
   try { el = document.elementFromPoint(e.clientX, e.clientY) } catch (err) {}
-  var overMenu = !!(el && el.closest && (el.closest('.dshwv-bubble') || el.closest('.dshwv-menu') || el.closest('.dshwv-menu-btn')))
+  var overMenu = !!(el && el.closest && (el.closest('.dshwv-bubble') || el.closest('.dshwv-menu')))
   var over = overMenu || isWhaleHit(e)
   setWidgetCursor(over ? 'grab' : '')
-  menuBtn.classList.toggle('dshwv-menu-btn-visible', over || menuOpen)
   // 鼠标穿透：不在鲸鱼/菜单上时把鼠标事件交给下层窗口（forward 保留 mousemove）
   if (API.setIgnore) API.setIgnore(!(over || menuOpen))
 }

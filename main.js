@@ -9,10 +9,10 @@
 // ============================================================================
 'use strict'
 
-const { app, BrowserWindow, ipcMain, screen, Menu, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Menu } = require('electron')
 const path = require('node:path')
 const { createWhaleCore, isPeakTime } = require('./lib/core.js')
-const { createPlatformClient, BASE, USAGE_URL } = require('./lib/platform.js')
+const { createPlatformClient, PARTITION, BASE, USAGE_URL } = require('./lib/platform.js')
 
 const isDev = !app.isPackaged
 // portable 单文件版：PORTABLE_EXECUTABLE_DIR 指向便携 EXE 所在目录；
@@ -90,15 +90,46 @@ function setAutoStart(enabled) {
 }
 
 // ---------------------------------------------------------------------------
-// 对外跳转（白名单）
+// 用量详情窗口（应用内置 Chromium 窗口，非系统浏览器）
 // ---------------------------------------------------------------------------
-// ★ 只允许打开平台自己的固定地址；绝不把渲染层传来的任意字符串交给系统打开
-const ALLOWED_URLS = new Set([USAGE_URL, BASE + '/top_up', BASE + '/api_keys'])
+// 复用 persist:deepseek 分区 —— 打开即是已登录状态，无需再次登录。
+// 只允许打开固定的平台地址（不接受渲染层传入的任意 URL）。
+let detailWin = null
 
-function openAllowed(url) {
-  if (!ALLOWED_URLS.has(url)) return { ok: false, error: 'URL 不在白名单内' }
-  shell.openExternal(url).catch(() => {})
-  return { ok: true }
+function openDetails() {
+  if (detailWin && !detailWin.isDestroyed()) {
+    if (detailWin.isMinimized()) detailWin.restore()
+    detailWin.show()
+    detailWin.focus()
+    return { ok: true, reused: true }
+  }
+  try {
+    detailWin = new BrowserWindow({
+      width: 1280,
+      height: 880,
+      minWidth: 900,
+      minHeight: 600,
+      title: '用量详情 · DeepSeek 开放平台',
+      autoHideMenuBar: true,
+      backgroundColor: '#ffffff',
+      webPreferences: {
+        partition: PARTITION,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    })
+    detailWin.on('closed', () => {
+      detailWin = null
+    })
+    // 页面自身的 <title> 会覆盖窗口标题，这里保留我们设定的标题（便于识别）
+    detailWin.on('page-title-updated', (e) => e.preventDefault())
+    detailWin.loadURL(USAGE_URL)
+    return { ok: true }
+  } catch (err) {
+    detailWin = null
+    return { ok: false, error: String(err.message || err) }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,23 +235,77 @@ function createWindow() {
 
   win.loadFile(path.join(app.getAppPath(), 'renderer', 'index.html'))
 
-  // 冒烟测试：electron . --smoke —— 启动 5 秒后自动退出
+  // 冒烟测试：electron . --smoke —— 启动后自动退出并打印渲染层状态
   if (process.argv.includes('--smoke')) {
+    const WAIT_MS = Number((process.argv.find((a) => a.startsWith('--smoke-wait=')) || '').split('=')[1]) || 16000
     win.webContents.on('console-message', (e, level, message) => {
       console.log('[renderer:' + level + ']', message)
     })
     setTimeout(async () => {
       try {
+        // 1) 基础结构 + 屏上真实数据
         const r = await win.webContents.executeJavaScript(
-          '({ api: !!window.whaleAPI, widget: !!window.__dshWhaleWidget, root: !!document.querySelector(".dshwv-root"), img: !!document.querySelector(".dshwv-img"), autostartRow: !!document.querySelector(".dshwv-autostart"), loginRow: !!document.querySelector(".dshwv-login") })'
+          `({
+             api: !!window.whaleAPI,
+             widget: !!window.__dshWhaleWidget,
+             root: !!document.querySelector('.dshwv-root'),
+             img: !!document.querySelector('.dshwv-img'),
+             menuBtn: !!document.querySelector('.dshwv-menu-btn'),
+             autostartRow: !!document.querySelector('.dshwv-autostart'),
+             loginRow: !!document.querySelector('.dshwv-login'),
+             amount: (document.querySelector('.dshwv-amount') || {}).textContent || null,
+             hint: (document.querySelector('.dshwv-hint') || {}).textContent || null,
+             login: (document.querySelector('.dshwv-login-state') || {}).textContent || null
+           })`
         )
         console.log('SMOKE RENDERER: ' + JSON.stringify(r))
+        console.log('SMOKE CHECK menuBtn(应为 false): ' + r.menuBtn)
+
+        // 2) 设置面板：模拟右键菜单里的「设置…」→ 渲染层应打开面板
+        await win.webContents.executeJavaScript("window.dispatchEvent(new Event('x'))", true)
+        win.webContents.send('whale:openSettings')
+        await new Promise((s) => setTimeout(s, 600))
+        const panelOpen = await win.webContents.executeJavaScript(
+          "!!document.querySelector('.dshwv-menu.dshwv-menu-open')",
+          true
+        )
+        console.log('SMOKE CHECK 设置面板可打开: ' + panelOpen)
+
+        // 3) 用量详情：应弹出应用内置窗口（不是系统浏览器）
+        console.log('SMOKE DIAG 调用前 detailWin=' + !!detailWin)
+        const dr = openDetails()
+        await new Promise((s) => setTimeout(s, 4000))
+        console.log('SMOKE CHECK openDetails: ' + JSON.stringify(dr))
+        console.log('SMOKE DIAG 调用后 detailWin=' + !!detailWin)
+        console.log('SMOKE DIAG 窗口总数=' + BrowserWindow.getAllWindows().length)
+        console.log(
+          'SMOKE DIAG 各窗口标题: ' +
+            JSON.stringify(
+              BrowserWindow.getAllWindows().map((w) => {
+                try {
+                  return w.getTitle() || '(空)'
+                } catch (e) {
+                  return '(err)'
+                }
+              })
+            )
+        )
+        if (detailWin && !detailWin.isDestroyed()) {
+          console.log('SMOKE CHECK 详情窗口已弹出: true')
+          console.log('SMOKE CHECK 详情窗口标题: ' + detailWin.getTitle())
+          console.log('SMOKE CHECK 详情窗口 URL: ' + detailWin.webContents.getURL())
+          console.log('SMOKE CHECK 详情窗口可见: ' + detailWin.isVisible())
+        } else {
+          console.log('SMOKE CHECK 详情窗口已弹出: false')
+        }
+        const dr2 = openDetails()
+        console.log('SMOKE CHECK 复用同一窗口: ' + JSON.stringify(dr2))
       } catch (err) {
         console.log('SMOKE RENDERER ERROR: ' + err.message)
       }
       console.log('SMOKE OK: window created, size=' + JSON.stringify(win.getSize()) + ' pos=' + JSON.stringify(win.getPosition()))
       app.quit()
-    }, 5000)
+    }, WAIT_MS)
   }
 }
 
@@ -243,20 +328,8 @@ function animateWindowTo(tx, ty) {
 // ---------------------------------------------------------------------------
 function showContextMenu(pos) {
   if (!win) return
-  const auto = getAutoStart()
   const items = [
-    { label: '查看用量详情', click: () => openAllowed(USAGE_URL) },
-    {
-      label: auto.supported && auto.enabled ? '开机自启 ✓' : '开机自启',
-      enabled: auto.supported,
-      click: () => {
-        const next = !(auto.supported && auto.enabled)
-        const r = setAutoStart(next)
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('whale:autostartChanged', { enabled: !!(r && r.enabled) })
-        }
-      },
-    },
+    { label: '查看用量详情', click: () => openDetails() },
     { label: '设置…', click: () => win && !win.isDestroyed() && win.webContents.send('whale:openSettings') },
     { label: '重新登录开放平台', click: () => platform.openLogin().catch(() => {}) },
     { type: 'separator' },
@@ -281,7 +354,7 @@ ipcMain.handle('whale:getConfig', () => {
 ipcMain.handle('whale:saveConfig', (e, cfg) => core.saveConfig(cfg))
 ipcMain.handle('whale:fetchData', (e, force) => fetchData(!!force))
 ipcMain.handle('whale:openLogin', () => platform.openLogin().catch((err) => ({ ok: false, error: String(err) })))
-ipcMain.handle('whale:openDetails', () => openAllowed(USAGE_URL))
+ipcMain.handle('whale:openDetails', () => openDetails())
 ipcMain.handle('whale:contextMenu', (e, pos) => {
   showContextMenu(pos)
   return { ok: true }
