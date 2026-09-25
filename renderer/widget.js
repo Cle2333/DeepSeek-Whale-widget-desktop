@@ -14,6 +14,12 @@ var CHANGE_MS = 900
 var ANIM_MS = 700
 var BUBBLE_MS = 5000
 var FETCH_TIMEOUT_MS = 25000
+// 登录轮询上限：登录流程失败/取消时必须能停下来
+var LOGIN_WATCH_MS = 5 * 60 * 1000
+// 登录轮询的定时器与截止时间在这里声明（使用点在下方 loginBtn 回调里）：
+// 声明放在文件后部虽然靠 var 提升能跑，但可读性差、重构时极易出错
+var loginWatchTimer = null
+var loginWatchDeadline = 0
 var IMG_URL = './assets/DSniang1.png'
 var GIF_URL = './assets/rua.gif'
 
@@ -195,8 +201,20 @@ loginBtn.addEventListener('click', function () {
     loginStateEl.textContent = '等待登录…'
     // 登录成功后 updateLoginState(true) 会清掉这个定时器；
     // 这样不必等 60 秒轮询才把状态刷成「已登录 ✓」
+    // ★ 必须有上限：该轮询只在 updateLoginState(true)（取数成功）时被清除，
+    //   用户关掉登录窗或平台返回 NEED_LOGIN 时永远不会停 ——
+    //   此后每 5 秒触发一次 refresh(true) → 平台页面创建/加载（单次最长 15 秒），
+    //   既持续占用 CPU/网络，又与界面上已刷新的「未登录」文案自相矛盾
     if (loginWatchTimer) clearInterval(loginWatchTimer)
-    loginWatchTimer = setInterval(function () { refresh(true) }, 5000)
+    loginWatchDeadline = Date.now() + LOGIN_WATCH_MS
+    loginWatchTimer = setInterval(function () {
+      if (Date.now() > loginWatchDeadline) {
+        clearInterval(loginWatchTimer)
+        loginWatchTimer = null
+        return
+      }
+      refresh(true)
+    }, 5000)
   }).catch(function () {
     loginStateEl.textContent = '登录窗打开失败'
   })
@@ -686,7 +704,12 @@ function refresh(manual) {
           render()
         } else {
           state.loggingIn = false
-          var needLogin = code === 'NEED_LOGIN' || code === 'AUTH_EXPIRED'
+          // NO_CREDENTIAL 同样是「没登录」：平台未把 /usage 重定向到登录页
+          // （或 15 秒内没截获到 Authorization）时就是这个码。
+          // 漏掉它会让界面显示成被截断的内部错误码「平台会话不可用（NO_CRE」，
+          // 登录行也不会复位成「未登录」
+          var needLogin =
+            code === 'NEED_LOGIN' || code === 'AUTH_EXPIRED' || code === 'NO_CREDENTIAL'
           if (needLogin) updateLoginState(false)
           state.status = 'error'
           if (needLogin) state.message = '需登录开放平台'
@@ -744,8 +767,7 @@ function setBubbleOn(v) {
   if (!bubbleOn) hideCostBubble()
 }
 // 登录态显示（数据来自开放平台会话，不再有 API key）
-// loginWatchTimer：点「去登录」后启动的轮询，登录成功即清除
-var loginWatchTimer = null
+// loginWatchTimer / loginWatchDeadline 在文件顶部声明（声明与使用点同序）
 function updateLoginState(ok) {
   loginStateEl.textContent = ok ? '已登录 ✓' : '未登录'
   loginStateEl.className = 'dshwv-login-state' + (ok ? ' dshwv-login-ok' : '')
@@ -764,12 +786,22 @@ function applyAutoStart(want) {
   autostartToggle.disabled = true
   API.setAutoStart(!!want).then(function (r) {
     autostartToggle.disabled = false
-    var on = !!(r && r.ok && r.enabled)
-    autostartToggle.checked = on
-    autostartToggle.title = r && r.ok ? '开机时自动启动小鲸鱼' : ('设置失败：' + ((r && r.error) || '未知'))
-  }).catch(function () {
+    if (r && r.ok) {
+      autostartToggle.checked = !!r.enabled
+      autostartToggle.title = '开机时自动启动小鲸鱼'
+    } else {
+      // 失败时**不要臆造状态**：按 r.ok && r.enabled 算出来的 on 恒为 false，
+      // 会把复选框强制复位成「未勾选」，而真实注册项通常并未改动
+      // （例如原本已开启、本次「关闭」调用抛错）——界面就与注册表不一致了。
+      // 回到变更前的值（!want），并保留失败原因在 tooltip 里
+      autostartToggle.checked = !want
+      autostartToggle.title = '设置失败：' + ((r && r.error) || '未知')
+    }
+  }).catch(function (e) {
     autostartToggle.disabled = false
-    autostartToggle.checked = false
+    // 同上：异常时也回到变更前的值，而不是假定为「已关闭」
+    autostartToggle.checked = !want
+    autostartToggle.title = '设置失败：' + ((e && e.message) || '未知')
   })
 }
 function scaleToDisplay(s) {

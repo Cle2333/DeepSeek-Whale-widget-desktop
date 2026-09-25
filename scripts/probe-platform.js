@@ -18,22 +18,32 @@
 //   npx electron scripts/probe-platform.js --show    # 需要登录时显示窗口
 //
 // 输出：控制台 + probe-out.json（接口数据与结构；**不含凭据类接口的响应体**）
-// 注意：用 `npx electron <script>` 运行时 app 名是 "Electron"，
-//       故 userData 落在 %APPDATA%\Electron（打包后才会用本包名）。
 // ============================================================================
 'use strict'
 
-const { app, BrowserWindow, session } = require('electron')
+const { app, BrowserWindow } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 
 // 复用 lib/platform.js 的常量：各自硬编码一份的话，lib 里改了分区名或路径后
 // 探测脚本仍跑在旧值上，而「截获 0 条」这类结果很难被发现是分区不一致导致的
-const { PARTITION, BASE, USAGE_URL } = require('../lib/platform.js')
+const {
+  PARTITION,
+  BASE,
+  USAGE_URL,
+  APP_DATA_DIR_NAME,
+  LOGIN_WAIT_MS,
+  isLoginPath,
+} = require('../lib/platform.js')
 const OUT = path.join(__dirname, '..', 'probe-out.json')
 
+// ★ 必须钉死 userData：`npx electron <script>` 运行时 app 名是 "Electron"，
+//   不钉就会落在 %APPDATA%\Electron，**不是**应用（%APPDATA%\DeepSeekWhaleWidget）
+//   的那份 persist:deepseek —— 应用里已登录，这里也会走到「未登录 → 截获 0 条」，
+//   容易被误判成取数链路故障。必须与 main.js / 其余诊断脚本保持一致。
+app.setPath('userData', path.join(app.getPath('appData'), APP_DATA_DIR_NAME))
+
 const SHOW = process.argv.includes('--show')
-const LOGIN_WAIT_MS = 12 * 60 * 1000
 
 // 从平台前端 chunk 中提取的真实接口
 const TARGET_API = /\/api\/v0\/(users\/get_user_summary|users\/get_api_keys|usage\/by_api_key\/(cost|amount))(\?|$)/
@@ -93,16 +103,36 @@ function attachNetworkCapture(wc) {
     }
   })
 
-  // 放大缓冲，避免大响应被逐出
-  dbg
+  // 放大缓冲，避免大响应被逐出。
+  // ★ 必须 await：不 await 时无法保证 Network 域在随后 win.loadURL() 之前真正启用，
+  //   首屏请求可能整批漏采；且降级分支若再次 reject 会成为**未处理的 rejection**
+  //   （Node 视为致命错误，进程静默退出、连结果文件都没有）
+  return dbg
     .sendCommand('Network.enable', {
       maxTotalBufferSize: 200 * 1024 * 1024,
       maxResourceBufferSize: 100 * 1024 * 1024,
       maxPostDataSize: 1024 * 1024,
     })
-    .catch(() => dbg.sendCommand('Network.enable'))
-  log('✔ CDP Network 已启用（大缓冲）')
-  return true
+    .then(() => {
+      log('✔ CDP Network 已启用（大缓冲）')
+      return true
+    })
+    .catch((e1) => {
+      log('⚠ 大缓冲启用失败（' + e1.message + '），退回默认缓冲')
+      return dbg
+        .sendCommand('Network.enable')
+        .then(() => {
+          log('✔ CDP Network 已启用（默认缓冲）')
+          return true
+        })
+        .catch((e2) => {
+          // 返回 false 让调用方走已有的 capture-failed 终止分支：
+          // 绝不能在这里打印「✔ 已启用」然后继续 —— 那会产出「截获 0 条」的
+          // 结果文件，与文件头「避免误导性结果」的立意相悖
+          log('✘ CDP Network 启用失败:', e2.message)
+          return false
+        })
+    })
 }
 
 // 只读页面状态，不发请求（避免污染截获）
@@ -117,14 +147,13 @@ async function pageState(wc) {
   }
 }
 
-// 平台未登录会跳转到 /sign_in
+// 平台未登录会跳转到登录页（路径集合由 lib 统一维护，避免两处判定分叉）
 function isLoggedIn(st) {
-  return !!st && !!st.path && !st.path.startsWith('/sign_in') && !st.path.startsWith('/login')
+  return !!st && !!st.path && !isLoginPath(st.path)
 }
 
 // ---------------------------------------------------------------------------
 async function run() {
-  session.fromPartition(PARTITION) // 确保分区存在
   log(`分区 ${PARTITION}；show=${SHOW}`)
 
   win = new BrowserWindow({
@@ -140,11 +169,12 @@ async function run() {
     },
   })
 
-  // 截获启用失败就直接终止：否则会继续跑完（未登录时还会在 --show 下白等 12 分钟），
+  // 截获启用失败就直接终止：否则会继续跑完（未登录时还会在 --show 下白等 10 分钟），
   // 最后写出一个「截获 0 条」的结果文件，容易被误读成「接口没有数据」
-  if (!attachNetworkCapture(win.webContents)) {
+  // （必须 await：attachNetworkCapture 现在是异步的，漏了 await 就变成恒真判断）
+  if (!(await attachNetworkCapture(win.webContents))) {
     log('✘ 无法启用 CDP 截获，终止探测')
-    win.destroy()
+    if (!win.isDestroyed()) win.destroy()
     return finish('capture-failed')
   }
 
@@ -159,16 +189,22 @@ async function run() {
     log('⚠ 未登录（被重定向到 ' + st.path + '）')
     if (!SHOW) {
       log('请加 --show 重跑以显示登录窗口')
-      win.destroy()
+      if (!win.isDestroyed()) win.destroy()
       return finish('logged-out')
     }
-    log('已显示窗口，请在窗口内登录（最多 12 分钟）…')
+    log('已显示窗口，请在窗口内登录（最多 ' + Math.round(LOGIN_WAIT_MS / 60000) + ' 分钟）…')
     win.show()
     win.focus()
     const deadline = Date.now() + LOGIN_WAIT_MS
     while (Date.now() < deadline) {
       await sleep(3000)
-      if (win.isDestroyed()) break
+      // 用户在登录窗口点了关闭：退出循环时窗口已销毁，
+      // 后续不能再对它调 destroy()（会抛 "Object has been destroyed"，
+      // 被顶层 catch 吞成一行日志，结果文件也不会生成）
+      if (win.isDestroyed()) {
+        log('⚠ 登录窗口已被关闭，停止等待')
+        break
+      }
       st = await pageState(win.webContents)
       if (isLoggedIn(st)) {
         log('✔ 检测到已登录:', st.path)
@@ -180,7 +216,7 @@ async function run() {
   }
 
   if (!isLoggedIn(st)) {
-    win.destroy()
+    if (!win.isDestroyed()) win.destroy()
     return finish('logged-out-timeout')
   }
 
@@ -193,7 +229,7 @@ async function run() {
   st = await pageState(win.webContents)
   log('当前页:', st.path, '|', st.title)
 
-  win.destroy()
+  if (!win.isDestroyed()) win.destroy()
   return finish('logged-in', st)
 }
 
@@ -210,8 +246,12 @@ function finish(state, st) {
       path: c.url.replace(BASE, ''),
       http: c.status,
       bytes: c.bytes,
+      fromCache: c.fromCache === undefined ? null : c.fromCache,
       code: c.json ? c.json.code : null,
       bizKeys: c.json && c.json.data && c.json.data.biz_data ? Object.keys(c.json.data.biz_data) : null,
+      // 非 JSON 响应（WAF 挑战页 / 登录页 HTML）的正文片段：
+      // 不输出的话这类响应只剩 HTTP 状态和字节数，恰好丢掉最需要的排障线索
+      rawHead: c.rawHead || null,
       error: c.error || null,
     })),
     // ★ 落盘时排除 users/get_api_keys 的响应体：它含 API key 名称与掩码 id，

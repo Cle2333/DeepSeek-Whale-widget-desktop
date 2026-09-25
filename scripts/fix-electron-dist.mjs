@@ -18,8 +18,15 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
+
+// 脚本自身所在的包根目录。兜底判断必须基于它，**不能用 process.cwd()** ——
+// cwd 不是包根时（CI 的 --prefix、monorepo 子目录、从别处执行
+// `node scripts/fix-electron-dist.mjs`）会把「包存在但解析失败」误判成
+// 「未安装」并 exit(0)，把安装异常伪装成「无需修复」
+const desktopRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
 function log(...a) {
   console.log('[fix-electron]', ...a)
@@ -34,7 +41,7 @@ try {
   // 包目录明明在却解析不到 = 真异常（软链损坏、exports 限制等），
   // 不能当成「未安装」静默 exit(0) —— 那会把「修复失败」伪装成「无需修复」，
   // 与文末专门强调的「必须非零退出」自相矛盾
-  if (fs.existsSync(path.join(process.cwd(), 'node_modules', 'electron', 'package.json'))) {
+  if (fs.existsSync(path.join(desktopRoot, 'node_modules', 'electron', 'package.json'))) {
     log('node_modules/electron 存在但无法解析，视为安装异常。')
     process.exit(1)
   }
@@ -60,6 +67,28 @@ const distDir = path.join(pkgDir, 'dist')
 const exePath = path.join(distDir, platformPath)
 const pathTxt = path.join(pkgDir, 'path.txt')
 
+// 主程序体积下限**必须按平台区分**：macOS 的 Contents/MacOS/Electron 只是加载
+// Electron Framework 的薄壳（几 MB），统一用 20MB 会让 macOS 上 ①幂等检查永远
+// 判定 dist 不完整、每次安装重复解压，②解压成功后 tmpOk 仍为 false 而 exit(1)，
+// postinstall 必然失败（package.json 已声明 dist:mac，darwin 也在 PLATFORMS 白名单里）
+const MIN_BIN_SIZE = process.platform === 'darwin' ? 1024 * 1024 : 20 * 1024 * 1024
+
+// 判定某个 dist 目录里的二进制是否真的可用（幂等检查与解压结果校验共用同一份逻辑，
+// 避免两处各写一套阈值后出现「幂等通过但解压校验不过」的自相矛盾）
+function binLooksUsable(dir) {
+  try {
+    if (fs.statSync(path.join(dir, platformPath)).size <= MIN_BIN_SIZE) return false
+    if (process.platform === 'darwin') {
+      // 薄壳的体积下限不足以证明解压完整，额外要求 framework 目录在位
+      const fw = path.join(dir, 'Electron.app', 'Contents', 'Frameworks', 'Electron Framework.framework')
+      if (!fs.existsSync(fw)) return false
+    }
+    return true
+  } catch (err) {
+    return false
+  }
+}
+
 // --- 已就绪则跳过（幂等）---
 // 只查「文件在」不够：上次解压中断可能留下**截断的** electron.exe，
 // 而末尾的存在性校验照样通过 → 永远无法自愈。加版本文件与体积校验。
@@ -68,7 +97,8 @@ if (fs.existsSync(exePath) && fs.existsSync(pathTxt)) {
   const verOk = (() => {
     try { return fs.readFileSync(path.join(distDir, 'version'), 'utf8').trim() === version } catch (e) { return false }
   })()
-  const sizeOk = size > 20 * 1024 * 1024 // electron 主程序远大于 20MB
+  // 体积/完整性判定与解压后校验共用 binLooksUsable（含 macOS 的 framework 检查）
+  const sizeOk = binLooksUsable(distDir)
   if (verOk && sizeOk) {
     log(`electron ${version} 二进制已就绪，跳过。`)
     process.exit(0)
@@ -180,8 +210,7 @@ for (const [cmd, args] of attempts) {
 }
 
 // --- 只有确认解压出可执行文件，才动原 dist ---
-const tmpExe = path.join(tmpDir, platformPath)
-const tmpOk = extracted && fs.existsSync(tmpExe) && fs.statSync(tmpExe).size > 20 * 1024 * 1024
+const tmpOk = extracted && binLooksUsable(tmpDir)
 if (!tmpOk) {
   log('解压失败或结果不完整（缺少可用的 ' + platformPath + '），**保留原 dist 不变**。')
   log(`如需手动处理：把 ${zipPath}`)
@@ -201,7 +230,7 @@ if (fs.existsSync(srcTypes)) {
 fs.writeFileSync(pathTxt, platformPath, 'utf8')
 
 // --- 校验 ---
-const ok = fs.existsSync(exePath)
+const ok = binLooksUsable(distDir)
 const files = fs.readdirSync(distDir).length
 log(`${ok ? '✔' : '✘'} dist/ 条目数=${files}, ${platformPath} ${ok ? '已就位' : '缺失'}`)
 if (!ok) process.exit(1)

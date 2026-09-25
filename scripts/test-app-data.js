@@ -5,7 +5,7 @@
 const { app } = require('electron')
 const path = require('node:path')
 
-const { createPlatformClient, APP_DATA_DIR_NAME } = require('../lib/platform.js')
+const { createPlatformClient, APP_DATA_DIR_NAME, LOGIN_WAIT_MS } = require('../lib/platform.js')
 // ★ 与 main.js 保持一致：钉死会话目录（共用同一个常量，避免漏改后两处不一致）
 app.setPath('userData', path.join(app.getPath('appData'), APP_DATA_DIR_NAME))
 
@@ -25,20 +25,38 @@ app.whenReady().then(async () => {
     let snap = await pc.getSnapshot()
 
     if (!snap.ok && SHOW && (snap.code === 'NEED_LOGIN' || snap.code === 'NO_CREDENTIAL')) {
-      console.log('\n⚠ 未登录 —— 已弹出登录窗口，请在其中完成登录（最多 10 分钟）…')
+      console.log(
+        '\n⚠ 未登录 —— 已弹出登录窗口，请在其中完成登录（最多 ' +
+          Math.round(LOGIN_WAIT_MS / 60000) +
+          ' 分钟）…'
+      )
       const lr = await pc.openLogin()
       if (lr && lr.ok === false) {
         console.log('✘ 打开登录窗口失败:', lr.error)
         return
       }
-      const deadline = Date.now() + 10 * 60 * 1000
+      const deadline = Date.now() + LOGIN_WAIT_MS
+      let loggedIn = false
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 4000))
         const st = await pc.pageState()
-        if (st && st.ready) {
+        // 窗口被用户关闭时 pageState() 返回空 path：立即结束等待，
+        // 否则会安静地空转满 10 分钟，外层也分不清「超时」还是「被关闭」
+        if (!st || !st.path) {
+          console.log('⚠ 登录窗口已关闭，停止等待')
+          break
+        }
+        if (st.ready) {
+          loggedIn = true
           console.log('✔ 检测到登录，重新取数…')
           break
         }
+      }
+      // 未完成登录时再取一次毫无意义：openLogin 已把 userLoggingIn 置真，
+      // ensureReady 只会返回 LOGGING_IN，输出反而更难懂（容易误以为登录已生效）
+      if (!loggedIn) {
+        console.log('⚠ 未等到登录完成，跳过重新取数；完成登录后重跑本脚本即可')
+        return
       }
       snap = await pc.getSnapshot()
     }
@@ -59,6 +77,7 @@ app.whenReady().then(async () => {
       console.log(
         '今日消费  :',
         snap.todayCost,
+        snap.todayFound === false ? '(今日无消费)' : '',
         snap.todayError ? '(失败: ' + snap.todayCode + ' ' + snap.todayError + ')' : ''
       )
       console.log('峰谷      :', isPeakTime(Math.floor(Date.now() / 1000)) ? '高峰' : '谷时')

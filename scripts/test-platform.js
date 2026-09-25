@@ -37,7 +37,7 @@ app.whenReady().then(async () => {
       console.log('余额      :', snap.balance)
       console.log('赠送余额  :', snap.bonusBalance)
       console.log('总消费    :', snap.totalCost)
-      console.log('今日消费  :', snap.todayCost, snap.todayFound === false ? '(当日无桶)' : '')
+      console.log('今日消费  :', snap.todayCost, snap.todayFound === false ? '(今日无消费)' : '')
       console.log('今日明细  :', JSON.stringify(snap.todayByKey || {}, null, 2))
     }
     // 今日消费失败时 todayError 才是排查线索，别只打印 null
